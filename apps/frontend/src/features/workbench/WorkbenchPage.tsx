@@ -204,6 +204,7 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
             onRun={() => void runQuery()}
             heightPx={editorHeightPx}
             activeKeyspace={activeKeyspace}
+            schema={schema}
           />
           <div
             className="splitter splitter-horizontal"

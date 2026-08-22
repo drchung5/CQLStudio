@@ -19,7 +19,7 @@ function getChabotkoMarker(column: {
 }): ChabotkoMarker | null {
   if (column.isPartitionKey) {
     return {
-      text: column.keyPosition !== null ? `PK${column.keyPosition + 1}` : "PK",
+      text: "PK",
       arrow: null
     };
   }

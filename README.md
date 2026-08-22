@@ -65,6 +65,5 @@ Not included yet:
 - Notebook persistence
 - Charts
 - Query history
-- Advanced CQL autocomplete
 - Astra Secure Connect Bundle support
 - Gremlin / Graph functionality

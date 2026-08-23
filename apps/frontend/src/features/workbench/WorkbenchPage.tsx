@@ -242,6 +242,10 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
   const [resizeMode, setResizeMode] = useState<ResizeMode>(null);
   const [showAddCellDialog, setShowAddCellDialog] = useState(false);
   const [newCellType, setNewCellType] = useState<"cql" | "markdown">("cql");
+  const [editingNotebookName, setEditingNotebookName] = useState(false);
+  const [notebookNameDraft, setNotebookNameDraft] = useState("");
+  const [editingCellId, setEditingCellId] = useState<string | null>(null);
+  const [cellNameDraft, setCellNameDraft] = useState("");
   const gridRef = useRef<HTMLDivElement | null>(null);
 
   const anyCellRunning = cells.some((cell) => cell.cellType === "cql" && cell.execution.status === "running");
@@ -503,6 +507,29 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
     setNotebooks((prev) => prev.map((nb) => (nb.id === activeNotebookId ? { ...nb, name } : nb)));
   };
 
+  const startNotebookRename = () => {
+    setNotebookNameDraft(activeNotebook?.name ?? "");
+    setEditingNotebookName(true);
+  };
+
+  const commitNotebookRename = () => {
+    renameActiveNotebook(notebookNameDraft.trim() || "Untitled Notebook");
+    setEditingNotebookName(false);
+  };
+
+  const startCellRename = (cellId: string, currentName: string) => {
+    setEditingCellId(cellId);
+    setCellNameDraft(currentName);
+  };
+
+  const commitCellRename = (cellId: string) => {
+    updateCell(cellId, (current) => ({
+      ...current,
+      name: cellNameDraft.trim() || "Untitled Cell"
+    }));
+    setEditingCellId(null);
+  };
+
   const deleteActiveNotebook = () => {
     if (notebooks.length <= 1) {
       return;
@@ -549,27 +576,12 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
                 </option>
               ))}
             </select>
-            <input
-              className="notebook-name-input"
-              value={activeNotebook?.name ?? ""}
-              onChange={(event) => {
-                renameActiveNotebook(event.target.value);
-              }}
-              disabled={anyCellRunning}
-              aria-label="Active notebook name"
-            />
             <button onClick={createNotebookAndSwitch} disabled={anyCellRunning}>
               New Notebook
-            </button>
-            <button onClick={deleteActiveNotebook} disabled={anyCellRunning || notebooks.length <= 1}>
-              Delete Notebook
             </button>
           </div>
 
           <div className="session-controls">
-            <button onClick={() => void loadSchema()} disabled={schemaLoading || anyCellRunning}>
-              {schemaLoading ? "Refreshing..." : "Refresh Schema"}
-            </button>
             <button onClick={() => void handleDisconnect()}>Disconnect</button>
           </div>
         </div>
@@ -583,7 +595,14 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
           gridTemplateColumns: `${schemaWidthPx}px 10px minmax(0, 1fr)`
         }}
       >
-        <SchemaBrowser schema={schema} loading={schemaLoading} />
+        <SchemaBrowser
+          schema={schema}
+          loading={schemaLoading}
+          refreshDisabled={schemaLoading || anyCellRunning}
+          onRefresh={() => {
+            void loadSchema();
+          }}
+        />
         <div
           className="splitter splitter-vertical"
           onMouseDown={() => {
@@ -595,10 +614,49 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
         />
         <main className="workbench-main">
           <div className="notebook-cells-toolbar">
-            <h3>{activeNotebook?.name?.trim() || "Untitled Notebook"}</h3>
+            <div className="inline-name-row">
+              {editingNotebookName ? (
+                <input
+                  className="inline-name-input"
+                  value={notebookNameDraft}
+                  onChange={(event) => {
+                    setNotebookNameDraft(event.target.value);
+                  }}
+                  onBlur={commitNotebookRename}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitNotebookRename();
+                    }
+
+                    if (event.key === "Escape") {
+                      setEditingNotebookName(false);
+                    }
+                  }}
+                  autoFocus
+                  aria-label="Edit notebook name"
+                />
+              ) : (
+                <>
+                  <h3 className="inline-name-label">{activeNotebook?.name?.trim() || "Untitled Notebook"}</h3>
+                  <button
+                    className="name-edit-button"
+                    onClick={startNotebookRename}
+                    disabled={anyCellRunning}
+                    aria-label="Edit notebook name"
+                  >
+                    <svg className="name-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm18-11.5a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75L21 5.75z" />
+                    </svg>
+                  </button>
+                </>
+              )}
+            </div>
             <div className="notebook-cells-actions">
               <button onClick={openAddCellDialog} disabled={anyCellRunning}>
                 Add Cell
+              </button>
+              <button onClick={deleteActiveNotebook} disabled={anyCellRunning || notebooks.length <= 1}>
+                Delete Notebook
               </button>
             </div>
           </div>
@@ -609,22 +667,42 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
                 key={cell.id}
               >
                 <div className="workbench-cell-header">
-                  <input
-                    className="workbench-cell-name"
-                    value={cell.name}
-                    onChange={(event) => {
-                      const nextName = event.target.value;
-                      updateCell(cell.id, (current) => ({
-                        ...current,
-                        name: nextName
-                      }));
-                    }}
-                    placeholder={`Cell ${index + 1}`}
-                    aria-label={`Name for cell ${index + 1}`}
-                  />
-                  <button onClick={() => removeCell(cell.id)} disabled={anyCellRunning}>
-                    Remove
-                  </button>
+                  {editingCellId === cell.id ? (
+                    <input
+                      className="workbench-cell-name"
+                      value={cellNameDraft}
+                      onChange={(event) => {
+                        setCellNameDraft(event.target.value);
+                      }}
+                      placeholder={`Cell ${index + 1}`}
+                      aria-label={`Name for cell ${index + 1}`}
+                      onBlur={() => commitCellRename(cell.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          commitCellRename(cell.id);
+                        }
+
+                        if (event.key === "Escape") {
+                          setEditingCellId(null);
+                        }
+                      }}
+                      autoFocus
+                    />
+                  ) : (
+                    <div className="inline-name-row">
+                      <span className="inline-name-label">{cell.name.trim() || `Cell ${index + 1}`}</span>
+                      <button
+                        className="name-edit-button"
+                        onClick={() => startCellRename(cell.id, cell.name)}
+                        disabled={anyCellRunning}
+                        aria-label={`Edit name for cell ${index + 1}`}
+                      >
+                        <svg className="name-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm18-11.5a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75L21 5.75z" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
                 </div>
                 {cell.cellType === "cql" && (
                   <>
@@ -642,6 +720,7 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
                       heightPx={cell.editorHeightPx}
                       activeKeyspace={activeKeyspace}
                       schema={schema}
+                      onRemove={() => removeCell(cell.id)}
                     />
                     <div
                       className="splitter splitter-horizontal"
@@ -699,16 +778,21 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
                     <section className="markdown-editor-panel">
                       <div className="markdown-editor-header">
                         <h4>Markdown</h4>
-                        <button
-                          onClick={() => {
-                            updateCell(cell.id, (current) => ({
-                              ...current,
-                              markdownViewMode: current.markdownViewMode === "edit" ? "preview" : "edit"
-                            }));
-                          }}
-                        >
-                          {cell.markdownViewMode === "edit" ? "Preview" : "Edit"}
-                        </button>
+                        <div className="editor-toolbar-actions">
+                          <button
+                            onClick={() => {
+                              updateCell(cell.id, (current) => ({
+                                ...current,
+                                markdownViewMode: current.markdownViewMode === "edit" ? "preview" : "edit"
+                              }));
+                            }}
+                          >
+                            {cell.markdownViewMode === "edit" ? "Preview" : "Edit"}
+                          </button>
+                          <button onClick={() => removeCell(cell.id)} disabled={anyCellRunning}>
+                            Remove
+                          </button>
+                        </div>
                       </div>
                       {cell.markdownViewMode === "edit" ? (
                         <textarea

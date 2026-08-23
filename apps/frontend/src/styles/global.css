@@ -220,6 +220,52 @@ button.primary {
   font-size: 0.98rem;
 }
 
+.inline-name-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.inline-name-label {
+  font-weight: 700;
+}
+
+.inline-name-input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  background: #ffffff;
+  color: var(--ink);
+  min-width: 180px;
+}
+
+.name-edit-button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 0;
+  padding: 0.1rem;
+  line-height: 1;
+}
+
+.name-edit-button:hover {
+  color: var(--ink);
+}
+
+.name-edit-button:focus-visible {
+  outline: 2px solid #9ecfba;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.name-edit-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+  fill: currentColor;
+}
+
 .notebook-cells-actions {
   display: flex;
   align-items: center;
@@ -240,6 +286,61 @@ button.primary {
   overflow: auto;
   height: 100%;
   max-height: 100%;
+}
+
+.schema-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  margin-bottom: 0.55rem;
+}
+
+.schema-header h3 {
+  line-height: 1.2;
+}
+
+.schema-refresh-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #b8cec2;
+  background: #eef7f2;
+  color: #2d6751;
+  padding: 0;
+  border-radius: 999px;
+  line-height: 1;
+}
+
+.schema-refresh-button:hover:not(:disabled) {
+  background: #e0f0e8;
+  color: #1f4e3d;
+}
+
+.schema-refresh-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.schema-refresh-button:focus-visible {
+  outline: 2px solid #9ecfba;
+  outline-offset: 2px;
+}
+
+.schema-refresh-button svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.schema-refresh-button svg path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .schema-tree,
@@ -477,6 +578,12 @@ body.resizing {
   gap: 0.55rem;
   flex-wrap: wrap;
   margin-bottom: 0.5rem;
+}
+
+.editor-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
 }
 
 .editor-toolbar-title h3,

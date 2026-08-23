@@ -3,6 +3,8 @@ import type { SchemaResponse } from "@cqlstudio/shared";
 interface SchemaBrowserProps {
   schema: SchemaResponse | null;
   loading: boolean;
+  refreshDisabled: boolean;
+  onRefresh: () => void;
 }
 
 interface ChabotkoMarker {
@@ -42,10 +44,26 @@ function getChabotkoMarker(column: {
   return null;
 }
 
-export function SchemaBrowser({ schema, loading }: SchemaBrowserProps) {
+export function SchemaBrowser({ schema, loading, refreshDisabled, onRefresh }: SchemaBrowserProps) {
   return (
     <aside className="schema-browser">
-      <h3>Schema</h3>
+      <div className="schema-header">
+        <h3>Schema</h3>
+        <button
+          className="schema-refresh-button"
+          onClick={onRefresh}
+          disabled={refreshDisabled}
+          aria-label="Refresh schema"
+          title="Refresh schema"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M20 6v5h-5" />
+            <path d="M4 18v-5h5" />
+            <path d="M20 11a8 8 0 0 0-14-4" />
+            <path d="M4 13a8 8 0 0 0 14 4" />
+          </svg>
+        </button>
+      </div>
       {loading && <p>Loading schema...</p>}
       {!loading && (!schema || schema.keyspaces.length === 0) && <p>No non-system keyspaces found.</p>}
       {!loading && schema && schema.keyspaces.length > 0 && (

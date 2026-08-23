@@ -108,6 +108,7 @@ interface CqlEditorPanelProps {
   title?: string;
   onChange: (value: string) => void;
   onRun: () => void;
+  onRemove: () => void;
 }
 
 export function CqlEditorPanel({
@@ -118,7 +119,8 @@ export function CqlEditorPanel({
   schema,
   title,
   onChange,
-  onRun
+  onRun,
+  onRemove
 }: CqlEditorPanelProps) {
   useEffect(() => {
     completionContext.schema = schema;
@@ -137,9 +139,14 @@ export function CqlEditorPanel({
             Keyspace: <strong>{activeKeyspace ?? "(none)"}</strong>
           </p>
         </div>
-        <button onClick={onRun} disabled={running} className="primary">
-          {running ? "Running..." : "Run"}
-        </button>
+        <div className="editor-toolbar-actions">
+          <button onClick={onRun} disabled={running} className="primary">
+            {running ? "Running..." : "Run"}
+          </button>
+          <button onClick={onRemove} disabled={running}>
+            Remove
+          </button>
+        </div>
       </div>
       <Editor
         width="100%"

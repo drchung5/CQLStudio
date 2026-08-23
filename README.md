@@ -60,8 +60,6 @@ Included:
 - Cmd+Enter and Ctrl+Enter to execute CQL
 
 Not included yet:
-- Markdown cells
-- Notebook persistence
 - Charts
 - Query history
 - Astra Secure Connect Bundle support

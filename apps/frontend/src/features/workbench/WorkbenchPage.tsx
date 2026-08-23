@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { QueryExecutionResult, SchemaResponse } from "@cqlstudio/shared";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
 import { getSchema } from "../../api/schemaApi";
 import { executeQuery } from "../../api/queryApi";
 import { ApiClientError } from "../../api/client";
@@ -17,6 +19,7 @@ interface WorkbenchPageProps {
 }
 
 const initialCql = "SELECT now() FROM system.local;";
+const NOTEBOOK_STORAGE_KEY = "cqlstudio:notebook:v1";
 
 type ResizeMode =
   | {
@@ -39,12 +42,18 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function createCell(name: string, cql = "", initialExecution?: ExecutionState): WorkbenchCellState {
-  const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+function createCellId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+}
+
+function createCqlCell(name: string, content = "", initialExecution?: ExecutionState): WorkbenchCellState {
+  const id = createCellId();
   return {
     id,
     name,
-    cql,
+    cellType: "cql",
+    markdownViewMode: "edit",
+    content,
     result: null,
     editorHeightPx: 280,
     statusMinimized: false,
@@ -57,22 +66,156 @@ function createCell(name: string, cql = "", initialExecution?: ExecutionState): 
   };
 }
 
+function createMarkdownCell(name: string, content = "# Notes\n"): WorkbenchCellState {
+  const id = createCellId();
+  return {
+    id,
+    name,
+    cellType: "markdown",
+    markdownViewMode: "edit",
+    content,
+    result: null,
+    editorHeightPx: 220,
+    statusMinimized: true,
+    resultsMinimized: true,
+    execution: {
+      status: "idle",
+      message: "Markdown cell"
+    }
+  };
+}
+
+function isCellLike(value: unknown): value is Partial<WorkbenchCellState> {
+  return typeof value === "object" && value !== null;
+}
+
+function renderMarkdownToHtml(markdown: string): string {
+  const parsed = marked.parse(markdown);
+  const html = typeof parsed === "string" ? parsed : "";
+  return DOMPurify.sanitize(html);
+}
+
+function loadPersistedCells(): WorkbenchCellState[] {
+  if (typeof window === "undefined") {
+    return [
+      createCqlCell("Cell 1", initialCql, {
+        status: "idle",
+        message: "Ready."
+      })
+    ];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(NOTEBOOK_STORAGE_KEY);
+    if (!raw) {
+      return [
+        createCqlCell("Cell 1", initialCql, {
+          status: "idle",
+          message: "Ready."
+        })
+      ];
+    }
+
+    const parsed = JSON.parse(raw) as { cells?: unknown[] };
+    if (!Array.isArray(parsed.cells) || parsed.cells.length === 0) {
+      return [
+        createCqlCell("Cell 1", initialCql, {
+          status: "idle",
+          message: "Ready."
+        })
+      ];
+    }
+
+    const hydrated = parsed.cells
+      .filter(isCellLike)
+      .map((cell, index) => {
+        const type = cell.cellType === "markdown" ? "markdown" : "cql";
+        const legacyContent =
+          typeof (cell as { cql?: unknown }).cql === "string" ? ((cell as { cql?: string }).cql ?? "") : "";
+        const content = typeof cell.content === "string" ? cell.content : legacyContent;
+
+        return {
+          id: typeof cell.id === "string" ? cell.id : createCellId(),
+          name: typeof cell.name === "string" ? cell.name : `Cell ${index + 1}`,
+          cellType: type,
+          markdownViewMode: cell.markdownViewMode === "preview" ? "preview" : "edit",
+          content,
+          result: cell.result ?? null,
+          execution:
+            cell.execution &&
+            typeof cell.execution === "object" &&
+            "status" in cell.execution &&
+            "message" in cell.execution
+              ? (cell.execution as ExecutionState)
+              : {
+                  status: "idle",
+                  message: type === "markdown" ? "Markdown cell" : "Ready."
+                },
+          editorHeightPx:
+            typeof cell.editorHeightPx === "number"
+              ? clamp(cell.editorHeightPx, MIN_CELL_EDITOR_HEIGHT, MAX_CELL_EDITOR_HEIGHT)
+              : type === "markdown"
+                ? 220
+                : 280,
+          statusMinimized: typeof cell.statusMinimized === "boolean" ? cell.statusMinimized : type === "markdown",
+          resultsMinimized: typeof cell.resultsMinimized === "boolean" ? cell.resultsMinimized : type === "markdown"
+        } satisfies WorkbenchCellState;
+      });
+
+    return hydrated.length > 0
+      ? hydrated
+      : [
+          createCqlCell("Cell 1", initialCql, {
+            status: "idle",
+            message: "Ready."
+          })
+        ];
+  } catch {
+    return [
+      createCqlCell("Cell 1", initialCql, {
+        status: "idle",
+        message: "Ready."
+      })
+    ];
+  }
+}
+
 export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: WorkbenchPageProps) {
   const [schema, setSchema] = useState<SchemaResponse | null>(null);
   const [schemaLoading, setSchemaLoading] = useState(true);
-  const [cells, setCells] = useState<WorkbenchCellState[]>([
-    createCell("Cell 1", initialCql, {
-      status: "idle",
-      message: "Ready."
-    })
-  ]);
+  const [cells, setCells] = useState<WorkbenchCellState[]>(() => loadPersistedCells());
   const [activeKeyspace, setActiveKeyspace] = useState<string | null>(null);
   const [schemaWidthPx, setSchemaWidthPx] = useState(280);
   const [schemaMessage, setSchemaMessage] = useState<string | null>(null);
   const [resizeMode, setResizeMode] = useState<ResizeMode>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
 
-  const anyCellRunning = cells.some((cell) => cell.execution.status === "running");
+  const anyCellRunning = cells.some((cell) => cell.cellType === "cql" && cell.execution.status === "running");
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const cellsToPersist = cells.map((cell) => ({
+      id: cell.id,
+      name: cell.name,
+      cellType: cell.cellType,
+      markdownViewMode: cell.markdownViewMode,
+      content: cell.content,
+      editorHeightPx: cell.editorHeightPx,
+      statusMinimized: cell.statusMinimized,
+      resultsMinimized: cell.resultsMinimized
+    }));
+
+    window.localStorage.setItem(
+      NOTEBOOK_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        cells: cellsToPersist
+      })
+    );
+  }, [cells]);
 
   const updateCell = (cellId: string, updater: (cell: WorkbenchCellState) => WorkbenchCellState): void => {
     setCells((prev) => prev.map((cell) => (cell.id === cellId ? updater(cell) : cell)));
@@ -177,11 +320,11 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
 
   const runCell = async (cellId: string) => {
     const targetCell = cells.find((cell) => cell.id === cellId);
-    if (!targetCell) {
+    if (!targetCell || targetCell.cellType !== "cql") {
       return;
     }
 
-    if (!targetCell.cql.trim()) {
+    if (!targetCell.content.trim()) {
       updateCell(cellId, (cell) => ({
         ...cell,
         execution: {
@@ -201,7 +344,7 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
         }
       }));
 
-      const nextResult: QueryExecutionResult = await executeQuery(sessionId, targetCell.cql);
+      const nextResult: QueryExecutionResult = await executeQuery(sessionId, targetCell.content);
       setActiveKeyspace(nextResult.activeKeyspace ?? null);
 
       updateCell(cellId, (cell) => ({
@@ -231,7 +374,11 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
   };
 
   const addCell = () => {
-    setCells((prev) => [...prev, createCell(`Cell ${prev.length + 1}`)]);
+    setCells((prev) => [...prev, createCqlCell(`Cell ${prev.length + 1}`)]);
+  };
+
+  const addMarkdownCell = () => {
+    setCells((prev) => [...prev, createMarkdownCell(`Markdown ${prev.length + 1}`)]);
   };
 
   const removeCell = (cellId: string) => {
@@ -264,7 +411,10 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
             {schemaLoading ? "Refreshing..." : "Refresh Schema"}
           </button>
           <button onClick={addCell} disabled={anyCellRunning}>
-            Add Cell
+            Add CQL Cell
+          </button>
+          <button onClick={addMarkdownCell} disabled={anyCellRunning}>
+            Add Markdown Cell
           </button>
           <button onClick={() => void handleDisconnect()}>Disconnect</button>
         </div>
@@ -313,69 +463,130 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
                     Remove
                   </button>
                 </div>
-                <CqlEditorPanel
-                  title={`CQL Editor - ${cell.name.trim() || `Cell ${index + 1}`}`}
-                  value={cell.cql}
-                  onChange={(next) => {
-                    updateCell(cell.id, (current) => ({
-                      ...current,
-                      cql: next
-                    }));
-                  }}
-                  running={cell.execution.status === "running"}
-                  onRun={() => void runCell(cell.id)}
-                  heightPx={cell.editorHeightPx}
-                  activeKeyspace={activeKeyspace}
-                  schema={schema}
-                />
-                <div
-                  className="splitter splitter-horizontal"
-                  onMouseDown={(event) => {
-                    setResizeMode({
-                      kind: "cell-editor",
-                      cellId: cell.id,
-                      startY: event.clientY,
-                      startHeightPx: cell.editorHeightPx
-                    });
-                  }}
-                  role="separator"
-                  aria-orientation="horizontal"
-                  aria-label={`Resize cell ${index + 1} editor`}
-                />
-                <section className={`cell-subpanel${cell.statusMinimized ? " minimized" : ""}`}>
-                  <div className="cell-subpanel-header">
-                    <h4>Status</h4>
-                    <button
-                      onClick={() => {
+                {cell.cellType === "cql" && (
+                  <>
+                    <CqlEditorPanel
+                      title={`CQL Editor - ${cell.name.trim() || `Cell ${index + 1}`}`}
+                      value={cell.content}
+                      onChange={(next) => {
                         updateCell(cell.id, (current) => ({
                           ...current,
-                          statusMinimized: !current.statusMinimized
+                          content: next
                         }));
                       }}
-                      disabled={cell.execution.status === "running"}
-                    >
-                      {cell.statusMinimized ? "Expand" : "Minimize"}
-                    </button>
-                  </div>
-                  {!cell.statusMinimized && <ExecutionStatusBar execution={cell.execution} />}
-                </section>
+                      running={cell.execution.status === "running"}
+                      onRun={() => void runCell(cell.id)}
+                      heightPx={cell.editorHeightPx}
+                      activeKeyspace={activeKeyspace}
+                      schema={schema}
+                    />
+                    <div
+                      className="splitter splitter-horizontal"
+                      onMouseDown={(event) => {
+                        setResizeMode({
+                          kind: "cell-editor",
+                          cellId: cell.id,
+                          startY: event.clientY,
+                          startHeightPx: cell.editorHeightPx
+                        });
+                      }}
+                      role="separator"
+                      aria-orientation="horizontal"
+                      aria-label={`Resize cell ${index + 1} editor`}
+                    />
+                    <section className={`cell-subpanel${cell.statusMinimized ? " minimized" : ""}`}>
+                      <div className="cell-subpanel-header">
+                        <h4>Status</h4>
+                        <button
+                          onClick={() => {
+                            updateCell(cell.id, (current) => ({
+                              ...current,
+                              statusMinimized: !current.statusMinimized
+                            }));
+                          }}
+                          disabled={cell.execution.status === "running"}
+                        >
+                          {cell.statusMinimized ? "Expand" : "Minimize"}
+                        </button>
+                      </div>
+                      {!cell.statusMinimized && <ExecutionStatusBar execution={cell.execution} />}
+                    </section>
 
-                <section className={`cell-subpanel${cell.resultsMinimized ? " minimized" : ""}`}>
-                  <div className="cell-subpanel-header">
-                    <h4>Results</h4>
-                    <button
-                      onClick={() => {
-                        updateCell(cell.id, (current) => ({
-                          ...current,
-                          resultsMinimized: !current.resultsMinimized
-                        }));
+                    <section className={`cell-subpanel${cell.resultsMinimized ? " minimized" : ""}`}>
+                      <div className="cell-subpanel-header">
+                        <h4>Results</h4>
+                        <button
+                          onClick={() => {
+                            updateCell(cell.id, (current) => ({
+                              ...current,
+                              resultsMinimized: !current.resultsMinimized
+                            }));
+                          }}
+                        >
+                          {cell.resultsMinimized ? "Expand" : "Minimize"}
+                        </button>
+                      </div>
+                      {!cell.resultsMinimized && <QueryResultsPanel result={cell.result} />}
+                    </section>
+                  </>
+                )}
+
+                {cell.cellType === "markdown" && (
+                  <>
+                    <section className="markdown-editor-panel">
+                      <div className="markdown-editor-header">
+                        <h4>Markdown</h4>
+                        <button
+                          onClick={() => {
+                            updateCell(cell.id, (current) => ({
+                              ...current,
+                              markdownViewMode: current.markdownViewMode === "edit" ? "preview" : "edit"
+                            }));
+                          }}
+                        >
+                          {cell.markdownViewMode === "edit" ? "Preview" : "Edit"}
+                        </button>
+                      </div>
+                      {cell.markdownViewMode === "edit" ? (
+                        <textarea
+                          className="markdown-editor-input"
+                          value={cell.content}
+                          style={{ height: `${cell.editorHeightPx}px` }}
+                          onChange={(event) => {
+                            const next = event.target.value;
+                            updateCell(cell.id, (current) => ({
+                              ...current,
+                              content: next
+                            }));
+                          }}
+                          placeholder="Write markdown notes..."
+                        />
+                      ) : (
+                        <div
+                          className="markdown-preview-body"
+                          style={{ minHeight: `${cell.editorHeightPx}px` }}
+                          dangerouslySetInnerHTML={{
+                            __html: renderMarkdownToHtml(cell.content || "(empty markdown cell)")
+                          }}
+                        />
+                      )}
+                    </section>
+                    <div
+                      className="splitter splitter-horizontal"
+                      onMouseDown={(event) => {
+                        setResizeMode({
+                          kind: "cell-editor",
+                          cellId: cell.id,
+                          startY: event.clientY,
+                          startHeightPx: cell.editorHeightPx
+                        });
                       }}
-                    >
-                      {cell.resultsMinimized ? "Expand" : "Minimize"}
-                    </button>
-                  </div>
-                  {!cell.resultsMinimized && <QueryResultsPanel result={cell.result} />}
-                </section>
+                      role="separator"
+                      aria-orientation="horizontal"
+                      aria-label={`Resize markdown cell ${index + 1} editor`}
+                    />
+                  </>
+                )}
               </section>
             ))}
           </div>

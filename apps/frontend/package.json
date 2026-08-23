@@ -12,6 +12,8 @@
   "dependencies": {
     "@cqlstudio/shared": "*",
     "@monaco-editor/react": "^4.6.0",
+    "dompurify": "^3.4.8",
+    "marked": "^14.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

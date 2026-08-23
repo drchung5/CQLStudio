@@ -16,7 +16,9 @@ export interface WorkbenchState {
 export interface WorkbenchCellState {
   id: string;
   name: string;
-  cql: string;
+  cellType: "cql" | "markdown";
+  markdownViewMode: "edit" | "preview";
+  content: string;
   result: QueryResult | null;
   execution: ExecutionState;
   editorHeightPx: number;

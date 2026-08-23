@@ -328,6 +328,51 @@ button.primary {
   border-radius: 0;
 }
 
+.markdown-editor-panel {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.markdown-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.45rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+  background: #f2f8f4;
+}
+
+.markdown-editor-header h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.markdown-editor-input {
+  width: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: 0.7rem;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.markdown-preview-body {
+  padding: 0.7rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ink);
+}
+
+.markdown-preview-body :first-child {
+  margin-top: 0;
+}
+
 .splitter {
   border-radius: 8px;
   background: linear-gradient(180deg, #e5efe8, #d4e5da);

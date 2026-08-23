@@ -212,8 +212,17 @@ export function CqlEditorPanel({
           <button onClick={onRun} disabled={running} className="primary">
             {running ? "Running..." : "Run"}
           </button>
-          <button onClick={onRemove} disabled={running}>
-            Remove
+          <button
+            className="remove-icon-button"
+            onClick={onRemove}
+            disabled={running}
+            aria-label="Remove cell"
+            title="Remove cell"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="8" />
+              <path d="M9 9l6 6M15 9l-6 6" />
+            </svg>
           </button>
         </div>
       </div>
@@ -366,6 +375,10 @@ export function CqlEditorPanel({
           minimap: { enabled: false },
           fontSize: 14,
           wordWrap: "on",
+          lineNumbersMinChars: 2,
+          lineDecorationsWidth: 8,
+          glyphMargin: false,
+          folding: false,
           padding: {
             top: 8,
             bottom: 6

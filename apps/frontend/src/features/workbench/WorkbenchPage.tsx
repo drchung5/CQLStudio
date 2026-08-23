@@ -520,6 +520,13 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
   };
 
   const removeCell = (cellId: string) => {
+    const target = cells.find((cell) => cell.id === cellId);
+    const label = target?.name?.trim() || "this cell";
+    const confirmed = window.confirm(`Delete ${label}? This action cannot be undone.`);
+    if (!confirmed) {
+      return;
+    }
+
     setCells((prev) => prev.filter((cell) => cell.id !== cellId));
   };
 
@@ -561,6 +568,13 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
 
   const deleteActiveNotebook = () => {
     if (!activeNotebookId || notebooks.length === 0) {
+      return;
+    }
+
+    const currentNotebook = notebooks.find((nb) => nb.id === activeNotebookId);
+    const notebookLabel = currentNotebook?.name?.trim() || "this notebook";
+    const confirmed = window.confirm(`Delete ${notebookLabel}? This action cannot be undone.`);
+    if (!confirmed) {
       return;
     }
 
@@ -835,8 +849,17 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
                           >
                             {cell.markdownViewMode === "edit" ? "Preview" : "Edit"}
                           </button>
-                          <button onClick={() => removeCell(cell.id)} disabled={anyCellRunning}>
-                            Remove
+                          <button
+                            className="remove-icon-button"
+                            onClick={() => removeCell(cell.id)}
+                            disabled={anyCellRunning}
+                            aria-label="Remove cell"
+                            title="Remove cell"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                              <circle cx="12" cy="12" r="8" />
+                              <path d="M9 9l6 6M15 9l-6 6" />
+                            </svg>
                           </button>
                         </div>
                       </div>

@@ -590,6 +590,38 @@ body.resizing {
   gap: 0.45rem;
 }
 
+.remove-icon-button {
+  width: 42px;
+  height: 38px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d8a9a5;
+  background: #fff7f6;
+  color: #b6382f;
+  padding: 0;
+}
+
+.remove-icon-button:hover:not(:disabled) {
+  background: #ffecea;
+  color: #9f2f27;
+}
+
+.remove-icon-button svg {
+  width: 22px;
+  height: 22px;
+}
+
+.remove-icon-button svg circle,
+.remove-icon-button svg path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .editor-toolbar-title h3,
 .editor-toolbar-title p {
   margin: 0;

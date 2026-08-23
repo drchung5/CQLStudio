@@ -7,7 +7,6 @@ import { executeQuery } from "../../api/queryApi";
 import { ApiClientError } from "../../api/client";
 import { disconnect } from "../../api/connectionApi";
 import { CqlEditorPanel } from "./components/CqlEditorPanel";
-import { ExecutionStatusBar } from "./components/ExecutionStatusBar";
 import { QueryResultsPanel } from "./components/QueryResultsPanel";
 import { SchemaBrowser } from "./components/SchemaBrowser";
 import type { ExecutionState, WorkbenchCellState } from "./types/workbenchTypes";
@@ -31,6 +30,7 @@ interface NotebookIndexEntry {
 interface NotebookIndexPayload {
   activeNotebookId: string;
   notebooks: NotebookIndexEntry[];
+  notebookKeyspaces?: Record<string, string | null>;
 }
 
 type ResizeMode =
@@ -156,7 +156,12 @@ function hydrateCells(rawCells: unknown[]): WorkbenchCellState[] {
           typeof cell.execution === "object" &&
           "status" in cell.execution &&
           "message" in cell.execution
-            ? (cell.execution as ExecutionState)
+            ? (cell.execution as ExecutionState).status === "running"
+              ? {
+                  status: "idle",
+                  message: type === "markdown" ? "Markdown cell" : "Ready."
+                }
+              : (cell.execution as ExecutionState)
             : {
                 status: "idle",
                 message: type === "markdown" ? "Markdown cell" : "Ready."
@@ -175,13 +180,21 @@ function hydrateCells(rawCells: unknown[]): WorkbenchCellState[] {
   return hydrated.length > 0 ? hydrated : defaultCells();
 }
 
-function loadNotebookState(): { notebooks: NotebookIndexEntry[]; activeNotebookId: string; initialCells: WorkbenchCellState[] } {
+function loadNotebookState(): {
+  notebooks: NotebookIndexEntry[];
+  activeNotebookId: string;
+  initialCells: WorkbenchCellState[];
+  notebookKeyspaces: Record<string, string | null>;
+} {
   if (typeof window === "undefined") {
     const fallback = createNotebook("Notebook 1");
     return {
       notebooks: [fallback],
       activeNotebookId: fallback.id,
-      initialCells: defaultCells()
+      initialCells: defaultCells(),
+      notebookKeyspaces: {
+        [fallback.id]: null
+      }
     };
   }
 
@@ -199,7 +212,8 @@ function loadNotebookState(): { notebooks: NotebookIndexEntry[]; activeNotebookI
         return {
           notebooks: [],
           activeNotebookId: "",
-          initialCells: []
+          initialCells: [],
+          notebookKeyspaces: {}
         };
       }
 
@@ -212,11 +226,21 @@ function loadNotebookState(): { notebooks: NotebookIndexEntry[]; activeNotebookI
         const cellsRaw = window.localStorage.getItem(`${NOTEBOOK_CELLS_STORAGE_PREFIX}${activeNotebookId}`);
         const cellsParsed = cellsRaw ? (JSON.parse(cellsRaw) as { cells?: unknown[] }) : null;
         const initialCells = cellsParsed?.cells && Array.isArray(cellsParsed.cells) ? hydrateCells(cellsParsed.cells) : defaultCells();
+        const rawKeyspaces =
+          parsedIndex.notebookKeyspaces && typeof parsedIndex.notebookKeyspaces === "object"
+            ? parsedIndex.notebookKeyspaces
+            : {};
+        const notebookKeyspaces = notebooks.reduce<Record<string, string | null>>((acc, notebook) => {
+          const raw = rawKeyspaces[notebook.id];
+          acc[notebook.id] = typeof raw === "string" ? raw : null;
+          return acc;
+        }, {});
 
         return {
           notebooks,
           activeNotebookId,
-          initialCells
+          initialCells,
+          notebookKeyspaces
         };
       }
     }
@@ -229,7 +253,10 @@ function loadNotebookState(): { notebooks: NotebookIndexEntry[]; activeNotebookI
       return {
         notebooks: [migratedNotebook],
         activeNotebookId: migratedNotebook.id,
-        initialCells
+        initialCells,
+        notebookKeyspaces: {
+          [migratedNotebook.id]: null
+        }
       };
     }
 
@@ -237,14 +264,20 @@ function loadNotebookState(): { notebooks: NotebookIndexEntry[]; activeNotebookI
     return {
       notebooks: [fallback],
       activeNotebookId: fallback.id,
-      initialCells: defaultCells()
+      initialCells: defaultCells(),
+      notebookKeyspaces: {
+        [fallback.id]: null
+      }
     };
   } catch {
     const fallback = createNotebook("Notebook 1");
     return {
       notebooks: [fallback],
       activeNotebookId: fallback.id,
-      initialCells: defaultCells()
+      initialCells: defaultCells(),
+      notebookKeyspaces: {
+        [fallback.id]: null
+      }
     };
   }
 }
@@ -256,7 +289,12 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
   const [notebooks, setNotebooks] = useState<NotebookIndexEntry[]>(initialNotebookState.notebooks);
   const [activeNotebookId, setActiveNotebookId] = useState<string>(initialNotebookState.activeNotebookId);
   const [cells, setCells] = useState<WorkbenchCellState[]>(initialNotebookState.initialCells);
-  const [activeKeyspace, setActiveKeyspace] = useState<string | null>(null);
+  const [notebookKeyspaces, setNotebookKeyspaces] = useState<Record<string, string | null>>(
+    initialNotebookState.notebookKeyspaces
+  );
+  const [activeKeyspace, setActiveKeyspace] = useState<string | null>(
+    initialNotebookState.notebookKeyspaces[initialNotebookState.activeNotebookId] ?? null
+  );
   const [schemaWidthPx, setSchemaWidthPx] = useState(280);
   const [schemaMessage, setSchemaMessage] = useState<string | null>(null);
   const [resizeMode, setResizeMode] = useState<ResizeMode>(null);
@@ -267,6 +305,7 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
   const [editingCellId, setEditingCellId] = useState<string | null>(null);
   const [cellNameDraft, setCellNameDraft] = useState("");
   const gridRef = useRef<HTMLDivElement | null>(null);
+  const isNotebookSwitchingRef = useRef(false);
 
   const anyCellRunning = cells.some((cell) => cell.cellType === "cql" && cell.execution.status === "running");
 
@@ -279,13 +318,18 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
       NOTEBOOK_INDEX_STORAGE_KEY,
       JSON.stringify({
         activeNotebookId,
-        notebooks
+        notebooks,
+        notebookKeyspaces
       } satisfies NotebookIndexPayload)
     );
-  }, [activeNotebookId, notebooks]);
+  }, [activeNotebookId, notebooks, notebookKeyspaces]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
+      return;
+    }
+
+    if (isNotebookSwitchingRef.current) {
       return;
     }
 
@@ -295,6 +339,8 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
       cellType: cell.cellType,
       markdownViewMode: cell.markdownViewMode,
       content: cell.content,
+      result: cell.result,
+      execution: cell.execution,
       editorHeightPx: cell.editorHeightPx,
       statusMinimized: cell.statusMinimized,
       resultsMinimized: cell.resultsMinimized
@@ -316,12 +362,17 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
 
     if (!activeNotebookId) {
       setCells([]);
+      setActiveKeyspace(null);
+      isNotebookSwitchingRef.current = false;
       return;
     }
+
+    setActiveKeyspace(notebookKeyspaces[activeNotebookId] ?? null);
 
     const raw = window.localStorage.getItem(`${NOTEBOOK_CELLS_STORAGE_PREFIX}${activeNotebookId}`);
     if (!raw) {
       setCells(defaultCells());
+      isNotebookSwitchingRef.current = false;
       return;
     }
 
@@ -329,11 +380,14 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
       const parsed = JSON.parse(raw) as { cells?: unknown[] };
       if (!Array.isArray(parsed.cells)) {
         setCells(defaultCells());
+        isNotebookSwitchingRef.current = false;
         return;
       }
       setCells(hydrateCells(parsed.cells));
     } catch {
       setCells(defaultCells());
+    } finally {
+      isNotebookSwitchingRef.current = false;
     }
   }, [activeNotebookId]);
 
@@ -464,8 +518,12 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
         }
       }));
 
-      const nextResult: QueryExecutionResult = await executeQuery(sessionId, targetCell.content);
+      const nextResult: QueryExecutionResult = await executeQuery(sessionId, targetCell.content, activeKeyspace);
       setActiveKeyspace(nextResult.activeKeyspace ?? null);
+      setNotebookKeyspaces((prev) => ({
+        ...prev,
+        [activeNotebookId]: nextResult.activeKeyspace ?? null
+      }));
 
       updateCell(cellId, (cell) => ({
         ...cell,
@@ -530,11 +588,19 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
     setCells((prev) => prev.filter((cell) => cell.id !== cellId));
   };
 
+  const switchNotebook = (nextNotebookId: string) => {
+    isNotebookSwitchingRef.current = true;
+    setActiveNotebookId(nextNotebookId);
+  };
+
   const createNotebookAndSwitch = () => {
     setNotebooks((prev) => {
       const created = createNotebook(`Notebook ${prev.length + 1}`);
-      setActiveNotebookId(created.id);
-      setCells(defaultCells());
+      setNotebookKeyspaces((existing) => ({
+        ...existing,
+        [created.id]: null
+      }));
+      switchNotebook(created.id);
       return [...prev, created];
     });
   };
@@ -587,7 +653,12 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
 
     window.localStorage.removeItem(`${NOTEBOOK_CELLS_STORAGE_PREFIX}${activeNotebookId}`);
     setNotebooks(remaining);
-    setActiveNotebookId(nextNotebook?.id ?? "");
+    setNotebookKeyspaces((prev) => {
+      const next = { ...prev };
+      delete next[activeNotebookId];
+      return next;
+    });
+    switchNotebook(nextNotebook?.id ?? "");
     if (!nextNotebook) {
       setCells([]);
     }
@@ -616,7 +687,7 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
               className="notebook-select"
               value={activeNotebookId}
               onChange={(event) => {
-                setActiveNotebookId(event.target.value);
+                switchNotebook(event.target.value);
               }}
               disabled={anyCellRunning || notebooks.length === 0}
               aria-label="Select notebook"
@@ -745,7 +816,7 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
                       onRemove={() => removeCell(cell.id)}
                     />
                     <div
-                      className="splitter splitter-horizontal"
+                      className="splitter splitter-horizontal cell-fixed-gap-splitter"
                       onMouseDown={(event) => {
                         setResizeMode({
                           kind: "cell-editor",
@@ -758,39 +829,53 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
                       aria-orientation="horizontal"
                       aria-label={`Resize cell ${index + 1} editor`}
                     />
-                    <section className={`cell-subpanel${cell.statusMinimized ? " minimized" : ""}`}>
+                    <section className={`cell-subpanel results-only-panel${cell.statusMinimized ? " minimized" : ""}`}>
                       <div className="cell-subpanel-header">
-                        <h4>Status</h4>
-                        <button
-                          onClick={() => {
-                            updateCell(cell.id, (current) => ({
-                              ...current,
-                              statusMinimized: !current.statusMinimized
-                            }));
-                          }}
-                          disabled={cell.execution.status === "running"}
-                        >
-                          {cell.statusMinimized ? "Expand" : "Minimize"}
-                        </button>
+                        <div className="results-header-meta">
+                          <h4>Results</h4>
+                          <span className={`results-inline-status ${cell.execution.status}`}>
+                            {cell.execution.message}
+                            {typeof cell.execution.timeMs === "number" ? ` (${cell.execution.timeMs} ms)` : ""}
+                          </span>
+                        </div>
+                        <div className="cell-subpanel-header-actions">
+                          <button
+                            onClick={() => {
+                              updateCell(cell.id, (current) => ({
+                                ...current,
+                                result: null,
+                                execution: {
+                                  status: "idle",
+                                  message: "Ready."
+                                }
+                              }));
+                            }}
+                            disabled={cell.execution.status === "running"}
+                          >
+                            Clear
+                          </button>
+                          <button
+                            onClick={() => {
+                              updateCell(cell.id, (current) => {
+                                const nextMinimized = !current.statusMinimized;
+                                return {
+                                  ...current,
+                                  statusMinimized: nextMinimized,
+                                  resultsMinimized: nextMinimized
+                                };
+                              });
+                            }}
+                            disabled={cell.execution.status === "running"}
+                          >
+                            {cell.statusMinimized ? "Expand" : "Minimize"}
+                          </button>
+                        </div>
                       </div>
-                      {!cell.statusMinimized && <ExecutionStatusBar execution={cell.execution} />}
-                    </section>
-
-                    <section className={`cell-subpanel${cell.resultsMinimized ? " minimized" : ""}`}>
-                      <div className="cell-subpanel-header">
-                        <h4>Results</h4>
-                        <button
-                          onClick={() => {
-                            updateCell(cell.id, (current) => ({
-                              ...current,
-                              resultsMinimized: !current.resultsMinimized
-                            }));
-                          }}
-                        >
-                          {cell.resultsMinimized ? "Expand" : "Minimize"}
-                        </button>
-                      </div>
-                      {!cell.resultsMinimized && <QueryResultsPanel result={cell.result} />}
+                      {!cell.statusMinimized && (
+                        <>
+                          <QueryResultsPanel result={cell.result} />
+                        </>
+                      )}
                     </section>
                   </>
                 )}
@@ -888,7 +973,7 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
                       )}
                     </section>
                     <div
-                      className="splitter splitter-horizontal"
+                      className="splitter splitter-horizontal cell-fixed-gap-splitter"
                       onMouseDown={(event) => {
                         setResizeMode({
                           kind: "cell-editor",

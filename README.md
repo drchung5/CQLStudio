@@ -64,3 +64,15 @@ Not included yet:
 - Query history
 - Astra Secure Connect Bundle support
 - Gremlin / Graph functionality
+
+Future enhancements:
+- Query history and reusable snippets
+- Parameterized queries with input prompts
+- Result export (CSV/JSON)
+- Explain/trace helpers
+- Schema diff view
+- Saved connections and environment profiles
+- Statement safety confirmations for destructive commands
+- Notebook runbook mode (run all cells with summary)
+- Richer table UX (sort/filter/search/pagination)
+- Notebook import/export (JSON backup and sharing)

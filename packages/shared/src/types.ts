@@ -40,6 +40,7 @@ export type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
 export interface QueryExecuteRequest {
   sessionId: string;
   cql: string;
+  activeKeyspace?: string | null;
 }
 
 export type StatementType = "SELECT" | "NON_SELECT";

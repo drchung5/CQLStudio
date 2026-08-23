@@ -13,10 +13,19 @@ export function createQueryController(deps: QueryControllerDeps) {
   return {
     execute: async (req: Request, res: Response<ApiResponse<QueryExecutionResult>>, next: NextFunction) => {
       try {
-        const { sessionId, cql } = queryExecuteSchema.parse(req.body as { sessionId: string; cql: string });
+        const { sessionId, cql, activeKeyspace } = queryExecuteSchema.parse(req.body as {
+          sessionId: string;
+          cql: string;
+          activeKeyspace?: string | null;
+        });
         const session = deps.sessionStore.getSessionOrThrow(sessionId);
-        const execution = await deps.cassandraService.executeScript(session.client, cql, session.activeKeyspace);
-        session.activeKeyspace = execution.activeKeyspace;
+        const initialKeyspace = activeKeyspace ?? session.activeKeyspace;
+        const execution = await deps.cassandraService.executeScript(session.client, cql, initialKeyspace);
+
+        // Preserve legacy session-level behavior only when caller does not provide an explicit keyspace context.
+        if (activeKeyspace === undefined) {
+          session.activeKeyspace = execution.activeKeyspace;
+        }
 
         return res.json({ success: true, data: execution.result });
       } catch (error) {

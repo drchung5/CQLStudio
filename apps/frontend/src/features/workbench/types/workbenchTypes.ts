@@ -12,3 +12,14 @@ export interface WorkbenchState {
   result: QueryResult | null;
   execution: ExecutionState;
 }
+
+export interface WorkbenchCellState {
+  id: string;
+  name: string;
+  cql: string;
+  result: QueryResult | null;
+  execution: ExecutionState;
+  editorHeightPx: number;
+  statusMinimized: boolean;
+  resultsMinimized: boolean;
+}

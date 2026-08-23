@@ -2,6 +2,7 @@ import type { QueryExecutionResult, StatementQueryResult } from "@cqlstudio/shar
 
 interface QueryResultsPanelProps {
   result: QueryExecutionResult | null;
+  hideHeader?: boolean;
 }
 
 function renderCellValue(value: unknown): string {
@@ -16,7 +17,7 @@ function renderCellValue(value: unknown): string {
   return String(value);
 }
 
-export function QueryResultsPanel({ result }: QueryResultsPanelProps) {
+export function QueryResultsPanel({ result, hideHeader = true }: QueryResultsPanelProps) {
   const renderStatementResult = (statementResult: StatementQueryResult, prefix?: string) => (
     <div className="script-statement-result">
       {prefix && <p className="meta script-title">{prefix}</p>}
@@ -58,7 +59,7 @@ export function QueryResultsPanel({ result }: QueryResultsPanelProps) {
 
   return (
     <section className="results-panel">
-      <h3>Results</h3>
+      {!hideHeader && <h3>Results</h3>}
       {!result && <p>Run a CQL statement to see results.</p>}
 
       {result?.statementType === "SCRIPT" && (

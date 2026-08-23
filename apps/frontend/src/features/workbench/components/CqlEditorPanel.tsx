@@ -1,5 +1,5 @@
 import Editor from "@monaco-editor/react";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import type * as MonacoEditor from "monaco-editor";
 import type { SchemaResponse } from "@cqlstudio/shared";
 
@@ -36,6 +36,18 @@ interface ResolvedTable {
   tableName: string;
   columns: string[];
 }
+
+interface CompletionContext {
+  schema: SchemaResponse | null;
+  activeKeyspace: string | null;
+}
+
+const completionContext: CompletionContext = {
+  schema: null,
+  activeKeyspace: null
+};
+
+let completionProviderDisposable: MonacoEditor.IDisposable | null = null;
 
 function getCurrentStatement(textUntilCursor: string): string {
   const statements = textUntilCursor.split(";");
@@ -93,6 +105,7 @@ interface CqlEditorPanelProps {
   heightPx: number;
   activeKeyspace: string | null;
   schema: SchemaResponse | null;
+  title?: string;
   onChange: (value: string) => void;
   onRun: () => void;
 }
@@ -103,34 +116,23 @@ export function CqlEditorPanel({
   heightPx,
   activeKeyspace,
   schema,
+  title,
   onChange,
   onRun
 }: CqlEditorPanelProps) {
-  const monacoRef = useRef<typeof MonacoEditor | null>(null);
-  const completionDisposableRef = useRef<MonacoEditor.IDisposable | null>(null);
-  const schemaRef = useRef<SchemaResponse | null>(schema);
-  const activeKeyspaceRef = useRef<string | null>(activeKeyspace);
-
   useEffect(() => {
-    schemaRef.current = schema;
+    completionContext.schema = schema;
   }, [schema]);
 
   useEffect(() => {
-    activeKeyspaceRef.current = activeKeyspace;
+    completionContext.activeKeyspace = activeKeyspace;
   }, [activeKeyspace]);
-
-  useEffect(() => {
-    return () => {
-      completionDisposableRef.current?.dispose();
-      completionDisposableRef.current = null;
-    };
-  }, []);
 
   return (
     <section className="editor-panel">
       <div className="editor-toolbar">
         <div className="editor-toolbar-title">
-          <h3>CQL Editor</h3>
+          <h3>{title ?? "CQL Editor"}</h3>
           <p className="editor-keyspace">
             Keyspace: <strong>{activeKeyspace ?? "(none)"}</strong>
           </p>
@@ -145,135 +147,134 @@ export function CqlEditorPanel({
         value={value}
         onChange={(next) => onChange(next ?? "")}
         onMount={(editor, monaco) => {
-          monacoRef.current = monaco;
+          if (!completionProviderDisposable) {
+            completionProviderDisposable = monaco.languages.registerCompletionItemProvider("sql", {
+              triggerCharacters: [" ", "."],
+              provideCompletionItems: (model: MonacoEditor.editor.ITextModel, position: MonacoEditor.Position) => {
+                const textUntilCursor = model.getValueInRange({
+                  startLineNumber: 1,
+                  startColumn: 1,
+                  endLineNumber: position.lineNumber,
+                  endColumn: position.column
+                });
 
-          completionDisposableRef.current?.dispose();
-          completionDisposableRef.current = monaco.languages.registerCompletionItemProvider("sql", {
-            triggerCharacters: [" ", "."],
-            provideCompletionItems: (model: MonacoEditor.editor.ITextModel, position: MonacoEditor.Position) => {
-              const textUntilCursor = model.getValueInRange({
-                startLineNumber: 1,
-                startColumn: 1,
-                endLineNumber: position.lineNumber,
-                endColumn: position.column
-              });
+                const statement = getCurrentStatement(textUntilCursor);
+                const statementUpper = statement.toUpperCase();
+                const currentSchema = completionContext.schema;
+                const currentKeyspace = completionContext.activeKeyspace;
+                const word = model.getWordUntilPosition(position);
+                const range = {
+                  startLineNumber: position.lineNumber,
+                  endLineNumber: position.lineNumber,
+                  startColumn: word.startColumn,
+                  endColumn: word.endColumn
+                };
 
-              const statement = getCurrentStatement(textUntilCursor);
-              const statementUpper = statement.toUpperCase();
-              const currentSchema = schemaRef.current;
-              const currentKeyspace = activeKeyspaceRef.current;
-              const word = model.getWordUntilPosition(position);
-              const range = {
-                startLineNumber: position.lineNumber,
-                endLineNumber: position.lineNumber,
-                startColumn: word.startColumn,
-                endColumn: word.endColumn
-              };
+                const keywordSuggestions = CQL_KEYWORDS.map((keyword) => ({
+                  label: keyword,
+                  kind: monaco.languages.CompletionItemKind.Keyword,
+                  insertText: keyword,
+                  range
+                }));
 
-              const keywordSuggestions = CQL_KEYWORDS.map((keyword) => ({
-                label: keyword,
-                kind: monaco.languages.CompletionItemKind.Keyword,
-                insertText: keyword,
-                range
-              }));
+                const functionSuggestions = CQL_FUNCTIONS.map((fn) => ({
+                  label: fn,
+                  kind: monaco.languages.CompletionItemKind.Function,
+                  insertText: `${fn}()`,
+                  insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                  range
+                }));
 
-              const functionSuggestions = CQL_FUNCTIONS.map((fn) => ({
-                label: fn,
-                kind: monaco.languages.CompletionItemKind.Function,
-                insertText: `${fn}()` ,
-                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                range
-              }));
+                const keyspaceNames = currentSchema ? currentSchema.keyspaces.map((keyspace) => keyspace.name) : [];
+                const keyspaceSuggestions = keyspaceNames.map((keyspaceName) => ({
+                  label: keyspaceName,
+                  kind: monaco.languages.CompletionItemKind.Module,
+                  insertText: keyspaceName,
+                  range,
+                  detail: "Keyspace"
+                }));
 
-              const keyspaceNames = currentSchema ? currentSchema.keyspaces.map((keyspace) => keyspace.name) : [];
-              const keyspaceSuggestions = keyspaceNames.map((keyspaceName) => ({
-                label: keyspaceName,
-                kind: monaco.languages.CompletionItemKind.Module,
-                insertText: keyspaceName,
-                range,
-                detail: "Keyspace"
-              }));
+                const activeTables =
+                  currentSchema && currentKeyspace
+                    ? currentSchema.keyspaces.find((keyspace) => keyspace.name === currentKeyspace)?.tables ?? []
+                    : [];
+                const activeTableSuggestions = activeTables.map((table) => ({
+                  label: table.name,
+                  kind: monaco.languages.CompletionItemKind.Class,
+                  insertText: table.name,
+                  range,
+                  detail: `Table (${currentKeyspace ?? "no keyspace"})`
+                }));
 
-              const activeTables =
-                currentSchema && currentKeyspace
-                  ? currentSchema.keyspaces.find((keyspace) => keyspace.name === currentKeyspace)?.tables ?? []
-                  : [];
-              const activeTableSuggestions = activeTables.map((table) => ({
-                label: table.name,
-                kind: monaco.languages.CompletionItemKind.Class,
-                insertText: table.name,
-                range,
-                detail: `Table (${currentKeyspace ?? "no keyspace"})`
-              }));
+                const qualifiedTableSuggestions =
+                  currentSchema?.keyspaces.flatMap((keyspace) =>
+                    keyspace.tables.map((table) => ({
+                      label: `${keyspace.name}.${table.name}`,
+                      kind: monaco.languages.CompletionItemKind.Class,
+                      insertText: `${keyspace.name}.${table.name}`,
+                      range,
+                      detail: "Qualified table"
+                    }))
+                  ) ?? [];
 
-              const qualifiedTableSuggestions =
-                currentSchema?.keyspaces.flatMap((keyspace) =>
-                  keyspace.tables.map((table) => ({
-                    label: `${keyspace.name}.${table.name}`,
-                    kind: monaco.languages.CompletionItemKind.Class,
-                    insertText: `${keyspace.name}.${table.name}`,
-                    range,
-                    detail: "Qualified table"
-                  }))
-                ) ?? [];
+                const resolvedTable = resolveTableFromStatement(statement, currentSchema, currentKeyspace);
+                const columnSuggestions = (resolvedTable?.columns ?? []).map((columnName) => ({
+                  label: columnName,
+                  kind: monaco.languages.CompletionItemKind.Field,
+                  insertText: columnName,
+                  range,
+                  detail: `Column (${resolvedTable?.tableName ?? "table"})`
+                }));
 
-              const resolvedTable = resolveTableFromStatement(statement, currentSchema, currentKeyspace);
-              const columnSuggestions = (resolvedTable?.columns ?? []).map((columnName) => ({
-                label: columnName,
-                kind: monaco.languages.CompletionItemKind.Field,
-                insertText: columnName,
-                range,
-                detail: `Column (${resolvedTable?.tableName ?? "table"})`
-              }));
-
-              const allColumns =
-                currentSchema && currentKeyspace
-                  ? unique(
-                      (currentSchema.keyspaces.find((keyspace) => keyspace.name === currentKeyspace)?.tables ?? []).flatMap(
-                        (table) => table.columns.map((column) => column.name)
+                const allColumns =
+                  currentSchema && currentKeyspace
+                    ? unique(
+                        (currentSchema.keyspaces.find((keyspace) => keyspace.name === currentKeyspace)?.tables ?? []).flatMap(
+                          (table) => table.columns.map((column) => column.name)
+                        )
                       )
-                    )
-                  : [];
-              const allColumnSuggestions = allColumns.map((columnName) => ({
-                label: columnName,
-                kind: monaco.languages.CompletionItemKind.Field,
-                insertText: columnName,
-                range,
-                detail: "Column"
-              }));
+                    : [];
+                const allColumnSuggestions = allColumns.map((columnName) => ({
+                  label: columnName,
+                  kind: monaco.languages.CompletionItemKind.Field,
+                  insertText: columnName,
+                  range,
+                  detail: "Column"
+                }));
 
-              const useContext = /\bUSE\s+[a-zA-Z0-9_".]*$/i.test(statement);
-              const tableContext = /\b(?:FROM|INTO|UPDATE|TABLE)\s+[a-zA-Z0-9_".]*$/i.test(statement);
-              const whereOrSetContext = /\b(?:WHERE|SET)\s+[a-zA-Z0-9_",=.\s]*$/i.test(statement);
-              const selectBeforeFromContext = /\bSELECT\b/i.test(statementUpper) && !/\bFROM\b/i.test(statementUpper);
+                const useContext = /\bUSE\s+[a-zA-Z0-9_".]*$/i.test(statement);
+                const tableContext = /\b(?:FROM|INTO|UPDATE|TABLE)\s+[a-zA-Z0-9_".]*$/i.test(statement);
+                const whereOrSetContext = /\b(?:WHERE|SET)\s+[a-zA-Z0-9_",=.\s]*$/i.test(statement);
+                const selectBeforeFromContext = /\bSELECT\b/i.test(statementUpper) && !/\bFROM\b/i.test(statementUpper);
 
-              if (useContext) {
-                return { suggestions: keyspaceSuggestions };
-              }
+                if (useContext) {
+                  return { suggestions: keyspaceSuggestions };
+                }
 
-              if (tableContext) {
+                if (tableContext) {
+                  return {
+                    suggestions: [...activeTableSuggestions, ...qualifiedTableSuggestions]
+                  };
+                }
+
+                if (whereOrSetContext || selectBeforeFromContext) {
+                  return {
+                    suggestions: [...columnSuggestions, ...allColumnSuggestions, ...functionSuggestions]
+                  };
+                }
+
                 return {
-                  suggestions: [...activeTableSuggestions, ...qualifiedTableSuggestions]
+                  suggestions: [
+                    ...keywordSuggestions,
+                    ...functionSuggestions,
+                    ...activeTableSuggestions,
+                    ...columnSuggestions,
+                    ...keyspaceSuggestions
+                  ]
                 };
               }
-
-              if (whereOrSetContext || selectBeforeFromContext) {
-                return {
-                  suggestions: [...columnSuggestions, ...allColumnSuggestions, ...functionSuggestions]
-                };
-              }
-
-              return {
-                suggestions: [
-                  ...keywordSuggestions,
-                  ...functionSuggestions,
-                  ...activeTableSuggestions,
-                  ...columnSuggestions,
-                  ...keyspaceSuggestions
-                ]
-              };
-            }
-          });
+            });
+          }
 
           editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
             onRun();

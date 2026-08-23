@@ -60,7 +60,6 @@ Included:
 - Cmd+Enter and Ctrl+Enter to execute CQL
 
 Not included yet:
-- Multiple cells
 - Markdown cells
 - Notebook persistence
 - Charts

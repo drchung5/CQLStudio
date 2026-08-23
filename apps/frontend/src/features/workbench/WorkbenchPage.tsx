@@ -8,7 +8,7 @@ import { CqlEditorPanel } from "./components/CqlEditorPanel";
 import { ExecutionStatusBar } from "./components/ExecutionStatusBar";
 import { QueryResultsPanel } from "./components/QueryResultsPanel";
 import { SchemaBrowser } from "./components/SchemaBrowser";
-import type { ExecutionState } from "./types/workbenchTypes";
+import type { ExecutionState, WorkbenchCellState } from "./types/workbenchTypes";
 
 interface WorkbenchPageProps {
   sessionId: string;
@@ -18,41 +18,88 @@ interface WorkbenchPageProps {
 
 const initialCql = "SELECT now() FROM system.local;";
 
-type ResizeMode = "schema" | "editor" | null;
+type ResizeMode =
+  | {
+      kind: "schema";
+    }
+  | {
+      kind: "cell-editor";
+      cellId: string;
+      startY: number;
+      startHeightPx: number;
+    }
+  | null;
 
 const MIN_SCHEMA_WIDTH = 220;
 const MAX_SCHEMA_WIDTH = 520;
-const MIN_EDITOR_HEIGHT = 200;
-const MAX_EDITOR_HEIGHT = 640;
+const MIN_CELL_EDITOR_HEIGHT = 72;
+const MAX_CELL_EDITOR_HEIGHT = 700;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function createCell(name: string, cql = "", initialExecution?: ExecutionState): WorkbenchCellState {
+  const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  return {
+    id,
+    name,
+    cql,
+    result: null,
+    editorHeightPx: 280,
+    statusMinimized: false,
+    resultsMinimized: false,
+    execution:
+      initialExecution ?? {
+        status: "idle",
+        message: "Ready."
+      }
+  };
+}
+
 export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: WorkbenchPageProps) {
   const [schema, setSchema] = useState<SchemaResponse | null>(null);
   const [schemaLoading, setSchemaLoading] = useState(true);
-  const [cql, setCql] = useState(initialCql);
-  const [result, setResult] = useState<QueryExecutionResult | null>(null);
+  const [cells, setCells] = useState<WorkbenchCellState[]>([
+    createCell("Cell 1", initialCql, {
+      status: "idle",
+      message: "Ready."
+    })
+  ]);
   const [activeKeyspace, setActiveKeyspace] = useState<string | null>(null);
   const [schemaWidthPx, setSchemaWidthPx] = useState(280);
-  const [editorHeightPx, setEditorHeightPx] = useState(320);
-  const [execution, setExecution] = useState<ExecutionState>({
-    status: "idle",
-    message: "Ready."
-  });
+  const [schemaMessage, setSchemaMessage] = useState<string | null>(null);
   const [resizeMode, setResizeMode] = useState<ResizeMode>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
-  const mainRef = useRef<HTMLElement | null>(null);
+
+  const anyCellRunning = cells.some((cell) => cell.execution.status === "running");
+
+  const updateCell = (cellId: string, updater: (cell: WorkbenchCellState) => WorkbenchCellState): void => {
+    setCells((prev) => prev.map((cell) => (cell.id === cellId ? updater(cell) : cell)));
+  };
+
+  const updateCellEditorHeight = (cellId: string, heightPx: number): void => {
+    setCells((prev) =>
+      prev.map((cell) =>
+        cell.id === cellId
+          ? {
+              ...cell,
+              editorHeightPx: heightPx
+            }
+          : cell
+      )
+    );
+  };
 
   const loadSchema = async () => {
     try {
       setSchemaLoading(true);
+      setSchemaMessage(null);
       const nextSchema = await getSchema(sessionId);
       setSchema(nextSchema);
     } catch (error) {
       const message = error instanceof ApiClientError ? error.message : "Failed to load schema.";
-      setExecution({ status: "error", message });
+      setSchemaMessage(message);
     } finally {
       setSchemaLoading(false);
     }
@@ -71,7 +118,7 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
       } catch (error) {
         if (!cancelled) {
           const message = error instanceof ApiClientError ? error.message : "Failed to load schema.";
-          setExecution({ status: "error", message });
+          setSchemaMessage(message);
         }
       } finally {
         if (!cancelled) {
@@ -91,7 +138,7 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
     }
 
     const onMouseMove = (event: MouseEvent) => {
-      if (resizeMode === "schema") {
+      if (resizeMode.kind === "schema") {
         const gridRect = gridRef.current?.getBoundingClientRect();
         if (!gridRect) {
           return;
@@ -99,18 +146,17 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
 
         const nextWidth = clamp(event.clientX - gridRect.left, MIN_SCHEMA_WIDTH, MAX_SCHEMA_WIDTH);
         setSchemaWidthPx(nextWidth);
+        return;
       }
 
-      if (resizeMode === "editor") {
-        const mainRect = mainRef.current?.getBoundingClientRect();
-        if (!mainRect) {
-          return;
-        }
-
-        const rawHeight = event.clientY - mainRect.top - 8;
-        const maxByContainer = Math.max(MIN_EDITOR_HEIGHT, mainRect.height - 170);
-        const nextHeight = clamp(rawHeight, MIN_EDITOR_HEIGHT, Math.min(MAX_EDITOR_HEIGHT, maxByContainer));
-        setEditorHeightPx(nextHeight);
+      if (resizeMode.kind === "cell-editor") {
+        const deltaY = event.clientY - resizeMode.startY;
+        const nextHeight = clamp(
+          resizeMode.startHeightPx + deltaY,
+          MIN_CELL_EDITOR_HEIGHT,
+          MAX_CELL_EDITOR_HEIGHT
+        );
+        updateCellEditorHeight(resizeMode.cellId, nextHeight);
       }
     };
 
@@ -129,31 +175,73 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
     };
   }, [resizeMode]);
 
-  const runQuery = async () => {
-    if (!cql.trim()) {
-      setExecution({ status: "error", message: "Please enter a CQL statement." });
+  const runCell = async (cellId: string) => {
+    const targetCell = cells.find((cell) => cell.id === cellId);
+    if (!targetCell) {
+      return;
+    }
+
+    if (!targetCell.cql.trim()) {
+      updateCell(cellId, (cell) => ({
+        ...cell,
+        execution: {
+          status: "error",
+          message: "Please enter a CQL statement."
+        }
+      }));
       return;
     }
 
     try {
-      setExecution({ status: "running", message: "Executing statement..." });
-      const nextResult = await executeQuery(sessionId, cql);
-      setResult(nextResult);
+      updateCell(cellId, (cell) => ({
+        ...cell,
+        execution: {
+          status: "running",
+          message: "Executing statement..."
+        }
+      }));
+
+      const nextResult: QueryExecutionResult = await executeQuery(sessionId, targetCell.cql);
       setActiveKeyspace(nextResult.activeKeyspace ?? null);
-      setExecution({
-        status: "success",
-        message:
-          nextResult.statementType === "SCRIPT"
-            ? `Executed ${nextResult.statementCount} statements.`
-            : nextResult.statementType === "SELECT"
-              ? "SELECT completed."
-              : "Statement completed.",
-        timeMs: nextResult.executionTimeMs
-      });
+
+      updateCell(cellId, (cell) => ({
+        ...cell,
+        result: nextResult,
+        execution: {
+          status: "success",
+          message:
+            nextResult.statementType === "SCRIPT"
+              ? `Executed ${nextResult.statementCount} statements.`
+              : nextResult.statementType === "SELECT"
+                ? "SELECT completed."
+                : "Statement completed.",
+          timeMs: nextResult.executionTimeMs
+        }
+      }));
     } catch (error) {
       const message = error instanceof ApiClientError ? error.message : "Execution failed.";
-      setExecution({ status: "error", message });
+      updateCell(cellId, (cell) => ({
+        ...cell,
+        execution: {
+          status: "error",
+          message
+        }
+      }));
     }
+  };
+
+  const addCell = () => {
+    setCells((prev) => [...prev, createCell(`Cell ${prev.length + 1}`)]);
+  };
+
+  const removeCell = (cellId: string) => {
+    setCells((prev) => {
+      if (prev.length === 1) {
+        return prev;
+      }
+
+      return prev.filter((cell) => cell.id !== cellId);
+    });
   };
 
   const handleDisconnect = async () => {
@@ -172,12 +260,16 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
           <p>Connected: {connectionName}</p>
         </div>
         <div className="workbench-header-actions">
-          <button onClick={() => void loadSchema()} disabled={schemaLoading || execution.status === "running"}>
+          <button onClick={() => void loadSchema()} disabled={schemaLoading || anyCellRunning}>
             {schemaLoading ? "Refreshing..." : "Refresh Schema"}
+          </button>
+          <button onClick={addCell} disabled={anyCellRunning}>
+            Add Cell
           </button>
           <button onClick={() => void handleDisconnect()}>Disconnect</button>
         </div>
       </header>
+      {schemaMessage && <p className="workbench-message error">{schemaMessage}</p>}
 
       <div
         className="workbench-grid"
@@ -190,33 +282,103 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
         <div
           className="splitter splitter-vertical"
           onMouseDown={() => {
-            setResizeMode("schema");
+            setResizeMode({ kind: "schema" });
           }}
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize schema pane"
         />
-        <main className="workbench-main" ref={mainRef}>
-          <CqlEditorPanel
-            value={cql}
-            onChange={setCql}
-            running={execution.status === "running"}
-            onRun={() => void runQuery()}
-            heightPx={editorHeightPx}
-            activeKeyspace={activeKeyspace}
-            schema={schema}
-          />
-          <div
-            className="splitter splitter-horizontal"
-            onMouseDown={() => {
-              setResizeMode("editor");
-            }}
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="Resize editor and results"
-          />
-          <ExecutionStatusBar execution={execution} />
-          <QueryResultsPanel result={result} />
+        <main className="workbench-main">
+          <div className="workbench-cells-list">
+            {cells.map((cell, index) => (
+              <section
+                className={`workbench-cell${cell.statusMinimized && cell.resultsMinimized ? " both-minimized" : ""}`}
+                key={cell.id}
+              >
+                <div className="workbench-cell-header">
+                  <input
+                    className="workbench-cell-name"
+                    value={cell.name}
+                    onChange={(event) => {
+                      const nextName = event.target.value;
+                      updateCell(cell.id, (current) => ({
+                        ...current,
+                        name: nextName
+                      }));
+                    }}
+                    placeholder={`Cell ${index + 1}`}
+                    aria-label={`Name for cell ${index + 1}`}
+                  />
+                  <button onClick={() => removeCell(cell.id)} disabled={cells.length === 1 || anyCellRunning}>
+                    Remove
+                  </button>
+                </div>
+                <CqlEditorPanel
+                  title={`CQL Editor - ${cell.name.trim() || `Cell ${index + 1}`}`}
+                  value={cell.cql}
+                  onChange={(next) => {
+                    updateCell(cell.id, (current) => ({
+                      ...current,
+                      cql: next
+                    }));
+                  }}
+                  running={cell.execution.status === "running"}
+                  onRun={() => void runCell(cell.id)}
+                  heightPx={cell.editorHeightPx}
+                  activeKeyspace={activeKeyspace}
+                  schema={schema}
+                />
+                <div
+                  className="splitter splitter-horizontal"
+                  onMouseDown={(event) => {
+                    setResizeMode({
+                      kind: "cell-editor",
+                      cellId: cell.id,
+                      startY: event.clientY,
+                      startHeightPx: cell.editorHeightPx
+                    });
+                  }}
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label={`Resize cell ${index + 1} editor`}
+                />
+                <section className={`cell-subpanel${cell.statusMinimized ? " minimized" : ""}`}>
+                  <div className="cell-subpanel-header">
+                    <h4>Status</h4>
+                    <button
+                      onClick={() => {
+                        updateCell(cell.id, (current) => ({
+                          ...current,
+                          statusMinimized: !current.statusMinimized
+                        }));
+                      }}
+                      disabled={cell.execution.status === "running"}
+                    >
+                      {cell.statusMinimized ? "Expand" : "Minimize"}
+                    </button>
+                  </div>
+                  {!cell.statusMinimized && <ExecutionStatusBar execution={cell.execution} />}
+                </section>
+
+                <section className={`cell-subpanel${cell.resultsMinimized ? " minimized" : ""}`}>
+                  <div className="cell-subpanel-header">
+                    <h4>Results</h4>
+                    <button
+                      onClick={() => {
+                        updateCell(cell.id, (current) => ({
+                          ...current,
+                          resultsMinimized: !current.resultsMinimized
+                        }));
+                      }}
+                    >
+                      {cell.resultsMinimized ? "Expand" : "Minimize"}
+                    </button>
+                  </div>
+                  {!cell.resultsMinimized && <QueryResultsPanel result={cell.result} />}
+                </section>
+              </section>
+            ))}
+          </div>
         </main>
       </div>
     </section>

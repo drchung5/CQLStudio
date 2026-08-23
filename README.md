@@ -73,6 +73,6 @@ Future enhancements:
 - Schema diff view
 - Saved connections and environment profiles
 - Statement safety confirmations for destructive commands
-- Notebook runbook mode (run all cells with summary)
+- Notebook runbook mode (run all cells with a summary)
 - Richer table UX (sort/filter/search/pagination)
 - Notebook import/export (JSON backup and sharing)

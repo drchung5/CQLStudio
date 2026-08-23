@@ -122,10 +122,13 @@ button.primary {
 }
 
 .workbench {
-  min-height: 100vh;
+  height: 100dvh;
+  min-height: 100dvh;
   padding: 1rem;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 0.8rem;
+  overflow: hidden;
 }
 
 .workbench-message {
@@ -160,17 +163,69 @@ button.primary {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.notebook-select,
+.notebook-name-input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.42rem 0.55rem;
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.notebook-name-input {
+  min-width: 170px;
+}
+
+.notebook-controls,
+.session-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.session-controls {
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--line);
 }
 
 .workbench-grid {
   display: grid;
   grid-template-columns: 280px 10px minmax(0, 1fr);
   gap: 0.8rem;
-  height: calc(100vh - 150px);
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
   overflow: hidden;
 }
 
-.schema-browser,
+.notebook-cells-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+  margin-bottom: 0.7rem;
+  background: #f8fcf8;
+}
+
+.notebook-cells-toolbar h3 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.notebook-cells-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
 .workbench-main,
 .results-panel,
 .editor-panel,
@@ -238,16 +293,22 @@ button.primary {
 
 .workbench-main {
   padding: 0.8rem;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
   height: 100%;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 
 .workbench-cells-list {
   display: grid;
   gap: 0.9rem;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  height: auto;
   overflow: auto;
   padding-right: 0.25rem;
 }
@@ -259,6 +320,7 @@ button.primary {
   background: #fbfdfb;
   display: grid;
   gap: 0.7rem;
+  min-width: 0;
 }
 
 .workbench-cell.both-minimized {
@@ -271,6 +333,8 @@ button.primary {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
 }
 
 .workbench-cell-header h3 {
@@ -283,7 +347,9 @@ button.primary {
   padding: 0.35rem 0.5rem;
   background: #ffffff;
   color: var(--ink);
-  min-width: 220px;
+  width: min(420px, 100%);
+  min-width: 180px;
+  flex: 1 1 220px;
   font-weight: 600;
 }
 
@@ -292,6 +358,7 @@ button.primary {
   border-radius: 10px;
   background: #ffffff;
   overflow: hidden;
+  min-width: 0;
 }
 
 .cell-subpanel-header {
@@ -333,6 +400,7 @@ button.primary {
   border-radius: 10px;
   background: #ffffff;
   overflow: hidden;
+  min-width: 0;
 }
 
 .markdown-editor-header {
@@ -399,18 +467,25 @@ body.resizing {
 
 .editor-panel {
   padding: 0.8rem;
+  min-width: 0;
 }
 
 .editor-toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
   margin-bottom: 0.5rem;
 }
 
 .editor-toolbar-title h3,
 .editor-toolbar-title p {
   margin: 0;
+}
+
+.editor-toolbar-title {
+  min-width: 0;
 }
 
 .editor-keyspace {
@@ -475,6 +550,57 @@ th {
 
 .meta {
   color: var(--muted);
+}
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(19, 35, 27, 0.35);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.dialog-panel {
+  width: min(420px, 100%);
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 16px 36px rgba(17, 53, 34, 0.16);
+  padding: 1rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.dialog-panel h3,
+.dialog-panel p {
+  margin: 0;
+}
+
+.dialog-panel p {
+  color: var(--muted);
+}
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  background: #fbfdfb;
+}
+
+.radio-option input {
+  margin: 0;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  margin-top: 0.2rem;
 }
 
 .script-statement-result {

@@ -20,6 +20,18 @@ interface WorkbenchPageProps {
 
 const initialCql = "SELECT now() FROM system.local;";
 const NOTEBOOK_STORAGE_KEY = "cqlstudio:notebook:v1";
+const NOTEBOOK_INDEX_STORAGE_KEY = "cqlstudio:notebooks:index:v1";
+const NOTEBOOK_CELLS_STORAGE_PREFIX = "cqlstudio:notebook:cells:v2:";
+
+interface NotebookIndexEntry {
+  id: string;
+  name: string;
+}
+
+interface NotebookIndexPayload {
+  activeNotebookId: string;
+  notebooks: NotebookIndexEntry[];
+}
 
 type ResizeMode =
   | {
@@ -44,6 +56,13 @@ function clamp(value: number, min: number, max: number): number {
 
 function createCellId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+}
+
+function createNotebook(name: string): NotebookIndexEntry {
+  return {
+    id: createCellId(),
+    name
+  };
 }
 
 function createCqlCell(name: string, content = "", initialExecution?: ExecutionState): WorkbenchCellState {
@@ -95,102 +114,151 @@ function renderMarkdownToHtml(markdown: string): string {
   return DOMPurify.sanitize(html);
 }
 
-function loadPersistedCells(): WorkbenchCellState[] {
+function defaultCells(): WorkbenchCellState[] {
+  return [
+    createCqlCell("Cell 1", initialCql, {
+      status: "idle",
+      message: "Ready."
+    })
+  ];
+}
+
+function hydrateCells(rawCells: unknown[]): WorkbenchCellState[] {
+  const hydrated = rawCells
+    .filter(isCellLike)
+    .map((cell, index) => {
+      const type = cell.cellType === "markdown" ? "markdown" : "cql";
+      const legacyContent =
+        typeof (cell as { cql?: unknown }).cql === "string" ? ((cell as { cql?: string }).cql ?? "") : "";
+      const content = typeof cell.content === "string" ? cell.content : legacyContent;
+
+      return {
+        id: typeof cell.id === "string" ? cell.id : createCellId(),
+        name: typeof cell.name === "string" ? cell.name : `Cell ${index + 1}`,
+        cellType: type,
+        markdownViewMode: cell.markdownViewMode === "preview" ? "preview" : "edit",
+        content,
+        result: cell.result ?? null,
+        execution:
+          cell.execution &&
+          typeof cell.execution === "object" &&
+          "status" in cell.execution &&
+          "message" in cell.execution
+            ? (cell.execution as ExecutionState)
+            : {
+                status: "idle",
+                message: type === "markdown" ? "Markdown cell" : "Ready."
+              },
+        editorHeightPx:
+          typeof cell.editorHeightPx === "number"
+            ? clamp(cell.editorHeightPx, MIN_CELL_EDITOR_HEIGHT, MAX_CELL_EDITOR_HEIGHT)
+            : type === "markdown"
+              ? 220
+              : 280,
+        statusMinimized: typeof cell.statusMinimized === "boolean" ? cell.statusMinimized : type === "markdown",
+        resultsMinimized: typeof cell.resultsMinimized === "boolean" ? cell.resultsMinimized : type === "markdown"
+      } satisfies WorkbenchCellState;
+    });
+
+  return hydrated.length > 0 ? hydrated : defaultCells();
+}
+
+function loadNotebookState(): { notebooks: NotebookIndexEntry[]; activeNotebookId: string; initialCells: WorkbenchCellState[] } {
   if (typeof window === "undefined") {
-    return [
-      createCqlCell("Cell 1", initialCql, {
-        status: "idle",
-        message: "Ready."
-      })
-    ];
+    const fallback = createNotebook("Notebook 1");
+    return {
+      notebooks: [fallback],
+      activeNotebookId: fallback.id,
+      initialCells: defaultCells()
+    };
   }
 
   try {
-    const raw = window.localStorage.getItem(NOTEBOOK_STORAGE_KEY);
-    if (!raw) {
-      return [
-        createCqlCell("Cell 1", initialCql, {
-          status: "idle",
-          message: "Ready."
-        })
-      ];
-    }
+    const indexRaw = window.localStorage.getItem(NOTEBOOK_INDEX_STORAGE_KEY);
+    if (indexRaw) {
+      const parsedIndex = JSON.parse(indexRaw) as Partial<NotebookIndexPayload>;
+      const notebooks = Array.isArray(parsedIndex.notebooks)
+        ? parsedIndex.notebooks
+            .filter((nb): nb is NotebookIndexEntry => typeof nb?.id === "string" && typeof nb?.name === "string")
+            .map((nb) => ({ id: nb.id, name: nb.name }))
+        : [];
 
-    const parsed = JSON.parse(raw) as { cells?: unknown[] };
-    if (!Array.isArray(parsed.cells) || parsed.cells.length === 0) {
-      return [
-        createCqlCell("Cell 1", initialCql, {
-          status: "idle",
-          message: "Ready."
-        })
-      ];
-    }
+      if (notebooks.length > 0) {
+        const activeNotebookId =
+          typeof parsedIndex.activeNotebookId === "string" && notebooks.some((nb) => nb.id === parsedIndex.activeNotebookId)
+            ? parsedIndex.activeNotebookId
+            : notebooks[0].id;
 
-    const hydrated = parsed.cells
-      .filter(isCellLike)
-      .map((cell, index) => {
-        const type = cell.cellType === "markdown" ? "markdown" : "cql";
-        const legacyContent =
-          typeof (cell as { cql?: unknown }).cql === "string" ? ((cell as { cql?: string }).cql ?? "") : "";
-        const content = typeof cell.content === "string" ? cell.content : legacyContent;
+        const cellsRaw = window.localStorage.getItem(`${NOTEBOOK_CELLS_STORAGE_PREFIX}${activeNotebookId}`);
+        const cellsParsed = cellsRaw ? (JSON.parse(cellsRaw) as { cells?: unknown[] }) : null;
+        const initialCells = cellsParsed?.cells && Array.isArray(cellsParsed.cells) ? hydrateCells(cellsParsed.cells) : defaultCells();
 
         return {
-          id: typeof cell.id === "string" ? cell.id : createCellId(),
-          name: typeof cell.name === "string" ? cell.name : `Cell ${index + 1}`,
-          cellType: type,
-          markdownViewMode: cell.markdownViewMode === "preview" ? "preview" : "edit",
-          content,
-          result: cell.result ?? null,
-          execution:
-            cell.execution &&
-            typeof cell.execution === "object" &&
-            "status" in cell.execution &&
-            "message" in cell.execution
-              ? (cell.execution as ExecutionState)
-              : {
-                  status: "idle",
-                  message: type === "markdown" ? "Markdown cell" : "Ready."
-                },
-          editorHeightPx:
-            typeof cell.editorHeightPx === "number"
-              ? clamp(cell.editorHeightPx, MIN_CELL_EDITOR_HEIGHT, MAX_CELL_EDITOR_HEIGHT)
-              : type === "markdown"
-                ? 220
-                : 280,
-          statusMinimized: typeof cell.statusMinimized === "boolean" ? cell.statusMinimized : type === "markdown",
-          resultsMinimized: typeof cell.resultsMinimized === "boolean" ? cell.resultsMinimized : type === "markdown"
-        } satisfies WorkbenchCellState;
-      });
+          notebooks,
+          activeNotebookId,
+          initialCells
+        };
+      }
+    }
 
-    return hydrated.length > 0
-      ? hydrated
-      : [
-          createCqlCell("Cell 1", initialCql, {
-            status: "idle",
-            message: "Ready."
-          })
-        ];
+    const legacyRaw = window.localStorage.getItem(NOTEBOOK_STORAGE_KEY);
+    if (legacyRaw) {
+      const parsedLegacy = JSON.parse(legacyRaw) as { cells?: unknown[] };
+      const migratedNotebook = createNotebook("Notebook 1");
+      const initialCells = Array.isArray(parsedLegacy.cells) ? hydrateCells(parsedLegacy.cells) : defaultCells();
+      return {
+        notebooks: [migratedNotebook],
+        activeNotebookId: migratedNotebook.id,
+        initialCells
+      };
+    }
+
+    const fallback = createNotebook("Notebook 1");
+    return {
+      notebooks: [fallback],
+      activeNotebookId: fallback.id,
+      initialCells: defaultCells()
+    };
   } catch {
-    return [
-      createCqlCell("Cell 1", initialCql, {
-        status: "idle",
-        message: "Ready."
-      })
-    ];
+    const fallback = createNotebook("Notebook 1");
+    return {
+      notebooks: [fallback],
+      activeNotebookId: fallback.id,
+      initialCells: defaultCells()
+    };
   }
 }
 
 export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: WorkbenchPageProps) {
+  const [initialNotebookState] = useState(() => loadNotebookState());
   const [schema, setSchema] = useState<SchemaResponse | null>(null);
   const [schemaLoading, setSchemaLoading] = useState(true);
-  const [cells, setCells] = useState<WorkbenchCellState[]>(() => loadPersistedCells());
+  const [notebooks, setNotebooks] = useState<NotebookIndexEntry[]>(initialNotebookState.notebooks);
+  const [activeNotebookId, setActiveNotebookId] = useState<string>(initialNotebookState.activeNotebookId);
+  const [cells, setCells] = useState<WorkbenchCellState[]>(initialNotebookState.initialCells);
   const [activeKeyspace, setActiveKeyspace] = useState<string | null>(null);
   const [schemaWidthPx, setSchemaWidthPx] = useState(280);
   const [schemaMessage, setSchemaMessage] = useState<string | null>(null);
   const [resizeMode, setResizeMode] = useState<ResizeMode>(null);
+  const [showAddCellDialog, setShowAddCellDialog] = useState(false);
+  const [newCellType, setNewCellType] = useState<"cql" | "markdown">("cql");
   const gridRef = useRef<HTMLDivElement | null>(null);
 
   const anyCellRunning = cells.some((cell) => cell.cellType === "cql" && cell.execution.status === "running");
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      NOTEBOOK_INDEX_STORAGE_KEY,
+      JSON.stringify({
+        activeNotebookId,
+        notebooks
+      } satisfies NotebookIndexPayload)
+    );
+  }, [activeNotebookId, notebooks]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -209,13 +277,36 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
     }));
 
     window.localStorage.setItem(
-      NOTEBOOK_STORAGE_KEY,
+      `${NOTEBOOK_CELLS_STORAGE_PREFIX}${activeNotebookId}`,
       JSON.stringify({
-        version: 1,
+        version: 2,
         cells: cellsToPersist
       })
     );
-  }, [cells]);
+  }, [activeNotebookId, cells]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const raw = window.localStorage.getItem(`${NOTEBOOK_CELLS_STORAGE_PREFIX}${activeNotebookId}`);
+    if (!raw) {
+      setCells(defaultCells());
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as { cells?: unknown[] };
+      if (!Array.isArray(parsed.cells)) {
+        setCells(defaultCells());
+        return;
+      }
+      setCells(hydrateCells(parsed.cells));
+    } catch {
+      setCells(defaultCells());
+    }
+  }, [activeNotebookId]);
 
   const updateCell = (cellId: string, updater: (cell: WorkbenchCellState) => WorkbenchCellState): void => {
     setCells((prev) => prev.map((cell) => (cell.id === cellId ? updater(cell) : cell)));
@@ -381,15 +472,50 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
     setCells((prev) => [...prev, createMarkdownCell(`Markdown ${prev.length + 1}`)]);
   };
 
-  const removeCell = (cellId: string) => {
-    setCells((prev) => {
-      if (prev.length === 1) {
-        return prev;
-      }
+  const openAddCellDialog = () => {
+    setNewCellType("cql");
+    setShowAddCellDialog(true);
+  };
 
-      return prev.filter((cell) => cell.id !== cellId);
+  const confirmAddCell = () => {
+    if (newCellType === "markdown") {
+      addMarkdownCell();
+    } else {
+      addCell();
+    }
+    setShowAddCellDialog(false);
+  };
+
+  const removeCell = (cellId: string) => {
+    setCells((prev) => prev.filter((cell) => cell.id !== cellId));
+  };
+
+  const createNotebookAndSwitch = () => {
+    setNotebooks((prev) => {
+      const created = createNotebook(`Notebook ${prev.length + 1}`);
+      setActiveNotebookId(created.id);
+      setCells(defaultCells());
+      return [...prev, created];
     });
   };
+
+  const renameActiveNotebook = (name: string) => {
+    setNotebooks((prev) => prev.map((nb) => (nb.id === activeNotebookId ? { ...nb, name } : nb)));
+  };
+
+  const deleteActiveNotebook = () => {
+    if (notebooks.length <= 1) {
+      return;
+    }
+
+    const currentIndex = notebooks.findIndex((nb) => nb.id === activeNotebookId);
+    const nextNotebook = notebooks[currentIndex > 0 ? currentIndex - 1 : 1];
+    window.localStorage.removeItem(`${NOTEBOOK_CELLS_STORAGE_PREFIX}${activeNotebookId}`);
+    setNotebooks((prev) => prev.filter((nb) => nb.id !== activeNotebookId));
+    setActiveNotebookId(nextNotebook.id);
+  };
+
+  const activeNotebook = notebooks.find((nb) => nb.id === activeNotebookId) ?? notebooks[0];
 
   const handleDisconnect = async () => {
     try {
@@ -407,16 +533,45 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
           <p>Connected: {connectionName}</p>
         </div>
         <div className="workbench-header-actions">
-          <button onClick={() => void loadSchema()} disabled={schemaLoading || anyCellRunning}>
-            {schemaLoading ? "Refreshing..." : "Refresh Schema"}
-          </button>
-          <button onClick={addCell} disabled={anyCellRunning}>
-            Add CQL Cell
-          </button>
-          <button onClick={addMarkdownCell} disabled={anyCellRunning}>
-            Add Markdown Cell
-          </button>
-          <button onClick={() => void handleDisconnect()}>Disconnect</button>
+          <div className="notebook-controls">
+            <select
+              className="notebook-select"
+              value={activeNotebookId}
+              onChange={(event) => {
+                setActiveNotebookId(event.target.value);
+              }}
+              disabled={anyCellRunning}
+              aria-label="Select notebook"
+            >
+              {notebooks.map((notebook) => (
+                <option key={notebook.id} value={notebook.id}>
+                  {notebook.name}
+                </option>
+              ))}
+            </select>
+            <input
+              className="notebook-name-input"
+              value={activeNotebook?.name ?? ""}
+              onChange={(event) => {
+                renameActiveNotebook(event.target.value);
+              }}
+              disabled={anyCellRunning}
+              aria-label="Active notebook name"
+            />
+            <button onClick={createNotebookAndSwitch} disabled={anyCellRunning}>
+              New Notebook
+            </button>
+            <button onClick={deleteActiveNotebook} disabled={anyCellRunning || notebooks.length <= 1}>
+              Delete Notebook
+            </button>
+          </div>
+
+          <div className="session-controls">
+            <button onClick={() => void loadSchema()} disabled={schemaLoading || anyCellRunning}>
+              {schemaLoading ? "Refreshing..." : "Refresh Schema"}
+            </button>
+            <button onClick={() => void handleDisconnect()}>Disconnect</button>
+          </div>
         </div>
       </header>
       {schemaMessage && <p className="workbench-message error">{schemaMessage}</p>}
@@ -439,6 +594,14 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
           aria-label="Resize schema pane"
         />
         <main className="workbench-main">
+          <div className="notebook-cells-toolbar">
+            <h3>{activeNotebook?.name?.trim() || "Untitled Notebook"}</h3>
+            <div className="notebook-cells-actions">
+              <button onClick={openAddCellDialog} disabled={anyCellRunning}>
+                Add Cell
+              </button>
+            </div>
+          </div>
           <div className="workbench-cells-list">
             {cells.map((cell, index) => (
               <section
@@ -459,7 +622,7 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
                     placeholder={`Cell ${index + 1}`}
                     aria-label={`Name for cell ${index + 1}`}
                   />
-                  <button onClick={() => removeCell(cell.id)} disabled={cells.length === 1 || anyCellRunning}>
+                  <button onClick={() => removeCell(cell.id)} disabled={anyCellRunning}>
                     Remove
                   </button>
                 </div>
@@ -592,6 +755,49 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
           </div>
         </main>
       </div>
+
+      {showAddCellDialog && (
+        <div className="dialog-overlay" role="presentation" onClick={() => setShowAddCellDialog(false)}>
+          <section
+            className="dialog-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Add cell"
+            onClick={(event) => {
+              event.stopPropagation();
+            }}
+          >
+            <h3>Add Cell</h3>
+            <p>Select the type of cell to create.</p>
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="new-cell-type"
+                value="cql"
+                checked={newCellType === "cql"}
+                onChange={() => setNewCellType("cql")}
+              />
+              CQL
+            </label>
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="new-cell-type"
+                value="markdown"
+                checked={newCellType === "markdown"}
+                onChange={() => setNewCellType("markdown")}
+              />
+              Markdown
+            </label>
+            <div className="dialog-actions">
+              <button onClick={() => setShowAddCellDialog(false)}>Cancel</button>
+              <button className="primary" onClick={confirmAddCell}>
+                Add
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   );
 }

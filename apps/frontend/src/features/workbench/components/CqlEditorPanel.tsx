@@ -142,6 +142,7 @@ export function CqlEditorPanel({
         </button>
       </div>
       <Editor
+        width="100%"
         height={`${heightPx}px`}
         defaultLanguage="sql"
         value={value}
@@ -281,6 +282,7 @@ export function CqlEditorPanel({
           });
         }}
         options={{
+          automaticLayout: true,
           minimap: { enabled: false },
           fontSize: 14,
           wordWrap: "on"

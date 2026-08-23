@@ -123,6 +123,18 @@ function defaultCells(): WorkbenchCellState[] {
   ];
 }
 
+function getNextCellName(cells: WorkbenchCellState[]): string {
+  const numericNames = cells
+    .map((cell) => {
+      const match = cell.name.trim().match(/^Cell\s+(\d+)$/i);
+      return match ? Number.parseInt(match[1], 10) : null;
+    })
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+  const next = numericNames.length > 0 ? Math.max(...numericNames) + 1 : cells.length + 1;
+  return `Cell ${next}`;
+}
+
 function hydrateCells(rawCells: unknown[]): WorkbenchCellState[] {
   const hydrated = rawCells
     .filter(isCellLike)
@@ -182,6 +194,14 @@ function loadNotebookState(): { notebooks: NotebookIndexEntry[]; activeNotebookI
             .filter((nb): nb is NotebookIndexEntry => typeof nb?.id === "string" && typeof nb?.name === "string")
             .map((nb) => ({ id: nb.id, name: nb.name }))
         : [];
+
+      if (Array.isArray(parsedIndex.notebooks) && notebooks.length === 0) {
+        return {
+          notebooks: [],
+          activeNotebookId: "",
+          initialCells: []
+        };
+      }
 
       if (notebooks.length > 0) {
         const activeNotebookId =
@@ -291,6 +311,11 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
 
   useEffect(() => {
     if (typeof window === "undefined") {
+      return;
+    }
+
+    if (!activeNotebookId) {
+      setCells([]);
       return;
     }
 
@@ -469,14 +494,18 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
   };
 
   const addCell = () => {
-    setCells((prev) => [...prev, createCqlCell(`Cell ${prev.length + 1}`)]);
+    setCells((prev) => [...prev, createCqlCell(getNextCellName(prev))]);
   };
 
   const addMarkdownCell = () => {
-    setCells((prev) => [...prev, createMarkdownCell(`Markdown ${prev.length + 1}`)]);
+    setCells((prev) => [...prev, createMarkdownCell(getNextCellName(prev))]);
   };
 
   const openAddCellDialog = () => {
+    if (!activeNotebookId) {
+      return;
+    }
+
     setNewCellType("cql");
     setShowAddCellDialog(true);
   };
@@ -531,15 +560,23 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
   };
 
   const deleteActiveNotebook = () => {
-    if (notebooks.length <= 1) {
+    if (!activeNotebookId || notebooks.length === 0) {
       return;
     }
 
     const currentIndex = notebooks.findIndex((nb) => nb.id === activeNotebookId);
-    const nextNotebook = notebooks[currentIndex > 0 ? currentIndex - 1 : 1];
+    const remaining = notebooks.filter((nb) => nb.id !== activeNotebookId);
+    const nextNotebook =
+      remaining.length > 0
+        ? remaining[Math.min(currentIndex > 0 ? currentIndex - 1 : 0, remaining.length - 1)]
+        : null;
+
     window.localStorage.removeItem(`${NOTEBOOK_CELLS_STORAGE_PREFIX}${activeNotebookId}`);
-    setNotebooks((prev) => prev.filter((nb) => nb.id !== activeNotebookId));
-    setActiveNotebookId(nextNotebook.id);
+    setNotebooks(remaining);
+    setActiveNotebookId(nextNotebook?.id ?? "");
+    if (!nextNotebook) {
+      setCells([]);
+    }
   };
 
   const activeNotebook = notebooks.find((nb) => nb.id === activeNotebookId) ?? notebooks[0];
@@ -567,7 +604,7 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
               onChange={(event) => {
                 setActiveNotebookId(event.target.value);
               }}
-              disabled={anyCellRunning}
+              disabled={anyCellRunning || notebooks.length === 0}
               aria-label="Select notebook"
             >
               {notebooks.map((notebook) => (
@@ -613,101 +650,72 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
           aria-label="Resize schema pane"
         />
         <main className="workbench-main">
-          <div className="notebook-cells-toolbar">
-            <div className="inline-name-row">
-              {editingNotebookName ? (
-                <input
-                  className="inline-name-input"
-                  value={notebookNameDraft}
-                  onChange={(event) => {
-                    setNotebookNameDraft(event.target.value);
-                  }}
-                  onBlur={commitNotebookRename}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      commitNotebookRename();
-                    }
+          {activeNotebook && (
+            <div className="notebook-cells-toolbar">
+              <div className="inline-name-row">
+                {editingNotebookName ? (
+                  <input
+                    className="inline-name-input"
+                    value={notebookNameDraft}
+                    onChange={(event) => {
+                      setNotebookNameDraft(event.target.value);
+                    }}
+                    onBlur={commitNotebookRename}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        commitNotebookRename();
+                      }
 
-                    if (event.key === "Escape") {
-                      setEditingNotebookName(false);
-                    }
-                  }}
-                  autoFocus
-                  aria-label="Edit notebook name"
-                />
-              ) : (
-                <>
-                  <h3 className="inline-name-label">{activeNotebook?.name?.trim() || "Untitled Notebook"}</h3>
-                  <button
-                    className="name-edit-button"
-                    onClick={startNotebookRename}
-                    disabled={anyCellRunning}
+                      if (event.key === "Escape") {
+                        setEditingNotebookName(false);
+                      }
+                    }}
+                    autoFocus
                     aria-label="Edit notebook name"
-                  >
-                    <svg className="name-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                      <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm18-11.5a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75L21 5.75z" />
-                    </svg>
-                  </button>
-                </>
-              )}
+                  />
+                ) : (
+                  <>
+                    <h3 className="inline-name-label">{activeNotebook.name.trim() || "Untitled Notebook"}</h3>
+                    <button
+                      className="name-edit-button"
+                      onClick={startNotebookRename}
+                      disabled={anyCellRunning}
+                      aria-label="Edit notebook name"
+                    >
+                      <svg className="name-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm18-11.5a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75L21 5.75z" />
+                      </svg>
+                    </button>
+                  </>
+                )}
+              </div>
+              <div className="notebook-cells-actions">
+                <button onClick={openAddCellDialog} disabled={anyCellRunning}>
+                  Add Cell
+                </button>
+                <button onClick={deleteActiveNotebook} disabled={anyCellRunning || notebooks.length === 0}>
+                  Delete Notebook
+                </button>
+              </div>
             </div>
-            <div className="notebook-cells-actions">
-              <button onClick={openAddCellDialog} disabled={anyCellRunning}>
-                Add Cell
-              </button>
-              <button onClick={deleteActiveNotebook} disabled={anyCellRunning || notebooks.length <= 1}>
-                Delete Notebook
-              </button>
-            </div>
-          </div>
+          )}
           <div className="workbench-cells-list">
             {cells.map((cell, index) => (
               <section
                 className={`workbench-cell${cell.statusMinimized && cell.resultsMinimized ? " both-minimized" : ""}`}
                 key={cell.id}
               >
-                <div className="workbench-cell-header">
-                  {editingCellId === cell.id ? (
-                    <input
-                      className="workbench-cell-name"
-                      value={cellNameDraft}
-                      onChange={(event) => {
-                        setCellNameDraft(event.target.value);
-                      }}
-                      placeholder={`Cell ${index + 1}`}
-                      aria-label={`Name for cell ${index + 1}`}
-                      onBlur={() => commitCellRename(cell.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          commitCellRename(cell.id);
-                        }
-
-                        if (event.key === "Escape") {
-                          setEditingCellId(null);
-                        }
-                      }}
-                      autoFocus
-                    />
-                  ) : (
-                    <div className="inline-name-row">
-                      <span className="inline-name-label">{cell.name.trim() || `Cell ${index + 1}`}</span>
-                      <button
-                        className="name-edit-button"
-                        onClick={() => startCellRename(cell.id, cell.name)}
-                        disabled={anyCellRunning}
-                        aria-label={`Edit name for cell ${index + 1}`}
-                      >
-                        <svg className="name-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                          <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm18-11.5a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75L21 5.75z" />
-                        </svg>
-                      </button>
-                    </div>
-                  )}
-                </div>
                 {cell.cellType === "cql" && (
                   <>
                     <CqlEditorPanel
-                      title={`CQL Editor - ${cell.name.trim() || `Cell ${index + 1}`}`}
+                      cellName={cell.name.trim() || `Cell ${index + 1}`}
+                      editingName={editingCellId === cell.id}
+                      nameDraft={cellNameDraft}
+                      renameDisabled={anyCellRunning}
+                      onStartRename={() => startCellRename(cell.id, cell.name)}
+                      onNameDraftChange={setCellNameDraft}
+                      onCommitRename={() => commitCellRename(cell.id)}
+                      onCancelRename={() => setEditingCellId(null)}
                       value={cell.content}
                       onChange={(next) => {
                         updateCell(cell.id, (current) => ({
@@ -777,9 +785,47 @@ export function WorkbenchPage({ sessionId, connectionName, onDisconnect }: Workb
                   <>
                     <section className="markdown-editor-panel">
                       <div className="markdown-editor-header">
-                        <h4>Markdown</h4>
+                        {editingCellId === cell.id ? (
+                          <div className="editor-title-row">
+                            <span className="editor-title-prefix">Markdown -</span>
+                            <input
+                              className="inline-name-input editor-inline-name-input"
+                              value={cellNameDraft}
+                              onChange={(event) => {
+                                setCellNameDraft(event.target.value);
+                              }}
+                              onBlur={() => commitCellRename(cell.id)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  commitCellRename(cell.id);
+                                }
+
+                                if (event.key === "Escape") {
+                                  setEditingCellId(null);
+                                }
+                              }}
+                              autoFocus
+                              aria-label={`Edit markdown cell ${index + 1} name`}
+                            />
+                          </div>
+                        ) : (
+                          <div className="inline-name-row">
+                            <h4>{`Markdown - ${cell.name.trim() || `Cell ${index + 1}`}`}</h4>
+                            <button
+                              className="name-edit-button"
+                              onClick={() => startCellRename(cell.id, cell.name)}
+                              disabled={anyCellRunning}
+                              aria-label={`Edit markdown cell ${index + 1} name`}
+                            >
+                              <svg className="name-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm18-11.5a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75L21 5.75z" />
+                              </svg>
+                            </button>
+                          </div>
+                        )}
                         <div className="editor-toolbar-actions">
                           <button
+                            className="primary"
                             onClick={() => {
                               updateCell(cell.id, (current) => ({
                                 ...current,

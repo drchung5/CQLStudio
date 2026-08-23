@@ -49,6 +49,10 @@ const completionContext: CompletionContext = {
 
 let completionProviderDisposable: MonacoEditor.IDisposable | null = null;
 
+type GlobalCompletionStore = typeof globalThis & {
+  __cqlstudioSqlCompletionProvider?: MonacoEditor.IDisposable;
+};
+
 function getCurrentStatement(textUntilCursor: string): string {
   const statements = textUntilCursor.split(";");
   return statements[statements.length - 1] ?? textUntilCursor;
@@ -99,25 +103,51 @@ function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
 }
 
+function dedupeCompletions<T extends { label: string | MonacoEditor.languages.CompletionItemLabel }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const label = typeof item.label === "string" ? item.label : item.label.label;
+    if (seen.has(label)) {
+      return false;
+    }
+    seen.add(label);
+    return true;
+  });
+}
+
 interface CqlEditorPanelProps {
+  cellName: string;
+  editingName: boolean;
+  nameDraft: string;
+  renameDisabled?: boolean;
   value: string;
   running: boolean;
   heightPx: number;
   activeKeyspace: string | null;
   schema: SchemaResponse | null;
-  title?: string;
+  onStartRename: () => void;
+  onNameDraftChange: (value: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
   onChange: (value: string) => void;
   onRun: () => void;
   onRemove: () => void;
 }
 
 export function CqlEditorPanel({
+  cellName,
+  editingName,
+  nameDraft,
+  renameDisabled = false,
   value,
   running,
   heightPx,
   activeKeyspace,
   schema,
-  title,
+  onStartRename,
+  onNameDraftChange,
+  onCommitRename,
+  onCancelRename,
   onChange,
   onRun,
   onRemove
@@ -134,7 +164,46 @@ export function CqlEditorPanel({
     <section className="editor-panel">
       <div className="editor-toolbar">
         <div className="editor-toolbar-title">
-          <h3>{title ?? "CQL Editor"}</h3>
+          <div className="editor-title-row">
+            {editingName ? (
+              <>
+                <span className="editor-title-prefix">CQL -</span>
+                <input
+                  className="inline-name-input editor-inline-name-input"
+                  value={nameDraft}
+                  onChange={(event) => {
+                    onNameDraftChange(event.target.value);
+                  }}
+                  onBlur={onCommitRename}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      onCommitRename();
+                    }
+
+                    if (event.key === "Escape") {
+                      onCancelRename();
+                    }
+                  }}
+                  autoFocus
+                  aria-label="Edit CQL cell name"
+                />
+              </>
+            ) : (
+              <>
+                <h3>{`CQL - ${cellName.trim() || "Untitled Cell"}`}</h3>
+                <button
+                  className="name-edit-button"
+                  onClick={onStartRename}
+                  disabled={renameDisabled}
+                  aria-label="Edit CQL cell name"
+                >
+                  <svg className="name-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm18-11.5a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75L21 5.75z" />
+                  </svg>
+                </button>
+              </>
+            )}
+          </div>
           <p className="editor-keyspace">
             Keyspace: <strong>{activeKeyspace ?? "(none)"}</strong>
           </p>
@@ -155,8 +224,10 @@ export function CqlEditorPanel({
         value={value}
         onChange={(next) => onChange(next ?? "")}
         onMount={(editor, monaco) => {
-          if (!completionProviderDisposable) {
-            completionProviderDisposable = monaco.languages.registerCompletionItemProvider("sql", {
+          const completionStore = globalThis as GlobalCompletionStore;
+
+          if (!completionStore.__cqlstudioSqlCompletionProvider) {
+            completionStore.__cqlstudioSqlCompletionProvider = monaco.languages.registerCompletionItemProvider("sql", {
               triggerCharacters: [" ", "."],
               provideCompletionItems: (model: MonacoEditor.editor.ITextModel, position: MonacoEditor.Position) => {
                 const textUntilCursor = model.getValueInRange({
@@ -256,33 +327,35 @@ export function CqlEditorPanel({
                 const selectBeforeFromContext = /\bSELECT\b/i.test(statementUpper) && !/\bFROM\b/i.test(statementUpper);
 
                 if (useContext) {
-                  return { suggestions: keyspaceSuggestions };
+                  return { suggestions: dedupeCompletions(keyspaceSuggestions) };
                 }
 
                 if (tableContext) {
                   return {
-                    suggestions: [...activeTableSuggestions, ...qualifiedTableSuggestions]
+                    suggestions: dedupeCompletions([...activeTableSuggestions, ...qualifiedTableSuggestions])
                   };
                 }
 
                 if (whereOrSetContext || selectBeforeFromContext) {
                   return {
-                    suggestions: [...columnSuggestions, ...allColumnSuggestions, ...functionSuggestions]
+                    suggestions: dedupeCompletions([...columnSuggestions, ...allColumnSuggestions, ...functionSuggestions])
                   };
                 }
 
                 return {
-                  suggestions: [
+                  suggestions: dedupeCompletions([
                     ...keywordSuggestions,
                     ...functionSuggestions,
                     ...activeTableSuggestions,
                     ...columnSuggestions,
                     ...keyspaceSuggestions
-                  ]
+                  ])
                 };
               }
             });
           }
+
+          completionProviderDisposable = completionStore.__cqlstudioSqlCompletionProvider ?? null;
 
           editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
             onRun();
@@ -292,7 +365,11 @@ export function CqlEditorPanel({
           automaticLayout: true,
           minimap: { enabled: false },
           fontSize: 14,
-          wordWrap: "on"
+          wordWrap: "on",
+          padding: {
+            top: 8,
+            bottom: 6
+          }
         }}
       />
       <p className="hint">Shortcut: Cmd+Enter (macOS) or Ctrl+Enter (Windows/Linux)</p>

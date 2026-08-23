@@ -80,10 +80,46 @@ export function mapQueryResult(
   cql: string,
   executionTimeMs: number
 ): StatementQueryResult {
+  const isDescribeKeyspaces = /^\s*describe\s+keyspaces\s*;?\s*$/i.test(cql);
+
   const isSelectByText = /^\s*select\b/i.test(cql);
   const hasColumns = (result.columns?.length ?? 0) > 0;
 
   if (isSelectByText || hasColumns) {
+    if (isDescribeKeyspaces) {
+      const seen = new Set<string>();
+      const rows = result.rows
+        .map((row) => {
+          const record = row as unknown as Record<string, unknown>;
+          const rawName =
+            typeof record.name === "string"
+              ? record.name
+              : typeof record.keyspace_name === "string"
+                ? record.keyspace_name
+                : null;
+
+          if (!rawName || seen.has(rawName)) {
+            return null;
+          }
+
+          seen.add(rawName);
+          return {
+            name: rawName
+          };
+        })
+        .filter((item): item is { name: string } => item !== null);
+
+      const describeResult: SelectResult = {
+        statementType: "SELECT",
+        columns: ["name"],
+        rows,
+        rowCount: rows.length,
+        executionTimeMs
+      };
+
+      return describeResult;
+    }
+
     const columns = (result.columns ?? []).map((column) => column.name);
     const rows = result.rows.map((row) => {
       const mappedRow: Record<string, unknown> = {};
